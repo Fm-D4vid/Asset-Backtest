@@ -1,0 +1,42 @@
+name: Update ETF Data
+
+on:
+  # 매주 월요일 오전 9시 (KST) = 일요일 자정 UTC
+  schedule:
+    - cron: '0 0 * * 1'
+  # 수동 실행 가능
+  workflow_dispatch:
+  # main 브랜치에 fetch_data.py 변경 시에도 실행
+  push:
+    branches: [main]
+    paths: [fetch_data.py]
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install finance-datareader pandas numpy
+
+      - name: Fetch ETF data
+        run: python fetch_data.py
+
+      - name: Commit & push data.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          # 변경사항이 있을 때만 커밋
+          git diff --staged --quiet || git commit -m "📊 data.json 자동 갱신 ($(date +%Y-%m-%d))"
+          git push
