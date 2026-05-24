@@ -34,6 +34,11 @@ const {useState,useMemo,useEffect,useRef}=React;
 const {LineChart,Line,BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,CartesianGrid,ReferenceLine}=Recharts;
 
 /* ═══════════════════════════════════════════════════════════
+   CONFIG — Worker 프록시 URL (Cloudflare Worker 배포 후 변경)
+   ═══════════════════════════════════════════════════════════ */
+const WORKER_URL = "https://dawn-union-e2e9.david-choi2631.workers.dev";
+
+/* ═══════════════════════════════════════════════════════════
    DATA — data.json에서 동적 로드
    fetch_data.py로 생성된 ETF 기반 실데이터
    ═══════════════════════════════════════════════════════════ */
@@ -189,12 +194,265 @@ function stats(results,init){
 }
 
 /* ═══════════════════════════════════════════════
+   STOCK EXPLORER — 한국 종목 검색/분석 탭
+   ═══════════════════════════════════════════════ */
+function StockExplorer(){
+  const[query,setQuery]=useState("");
+  const[results,setResults]=useState([]);
+  const[searching,setSearching]=useState(false);
+  const[selected,setSelected]=useState(null);
+  const[quote,setQuote]=useState(null);
+  const[history,setHistory]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[chartRange,setChartRange]=useState("1y");
+  const[error,setError]=useState(null);
+  const searchTimeout=useRef(null);
+
+  const doSearch=async(q)=>{
+    if(!q||q.length<1)return setResults([]);
+    setSearching(true);
+    try{
+      const r=await fetch(`${WORKER_URL}/api/search?q=${encodeURIComponent(q)}`);
+      const d=await r.json();
+      setResults(d.results||[]);
+    }catch(e){setError("검색 서버에 연결할 수 없습니다. Worker URL을 확인해주세요.");}
+    setSearching(false);
+  };
+
+  const onInput=(v)=>{
+    setQuery(v);setError(null);
+    clearTimeout(searchTimeout.current);
+    if(v.length>=1)searchTimeout.current=setTimeout(()=>doSearch(v),300);
+    else setResults([]);
+  };
+
+  const selectSymbol=async(symbol,name,code)=>{
+    setSelected({symbol,name,code});
+    setResults([]);
+    setQuery(name+" ("+code+")");
+    setLoading(true);setError(null);setQuote(null);setHistory([]);
+    try{
+      const[qRes,hRes]=await Promise.all([
+        fetch(`${WORKER_URL}/api/quote?symbol=${encodeURIComponent(symbol)}`).then(r=>r.json()),
+        fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent(symbol)}&range=${chartRange}`).then(r=>r.json())
+      ]);
+      setQuote(qRes.quote||null);
+      setHistory(hRes.history||[]);
+    }catch(e){setError("데이터를 불러올 수 없습니다.");}
+    setLoading(false);
+  };
+
+  const changeRange=async(range)=>{
+    setChartRange(range);
+    if(!selected)return;
+    try{
+      const hRes=await fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent(selected.symbol)}&range=${range}`).then(r=>r.json());
+      setHistory(hRes.history||[]);
+    }catch(e){}
+  };
+
+  const calcReturns=(hist)=>{
+    if(!hist||hist.length<2)return{};
+    const last=hist[hist.length-1];
+    const getReturn=(days)=>{
+      const idx=Math.max(0,hist.length-1-days);
+      const base=hist[idx];if(!base)return null;
+      return((last.adjClose||last.close)/(base.adjClose||base.close)-1)*100;
+    };
+    const yr=new Date().getFullYear().toString();
+    const ytdIdx=hist.findIndex(d=>d.date.startsWith(yr));
+    const ytdBase=ytdIdx>=0?hist[ytdIdx]:null;
+    return{
+      d1:getReturn(1),w1:getReturn(5),m1:getReturn(21),m3:getReturn(63),m6:getReturn(126),y1:getReturn(252),
+      ytd:ytdBase?((last.adjClose||last.close)/(ytdBase.adjClose||ytdBase.close)-1)*100:null,
+    };
+  };
+
+  const returns=useMemo(()=>calcReturns(history),[history]);
+
+  const chartData=useMemo(()=>{
+    if(!history.length)return[];
+    const step=Math.max(1,Math.floor(history.length/200));
+    return history.filter((_,i)=>i%step===0||i===history.length-1).map(d=>({date:d.date,price:d.adjClose||d.close}));
+  },[history]);
+
+  const fmtKRW=(v)=>{
+    if(v==null||isNaN(v))return"—";
+    return Number(v).toLocaleString("ko-KR")+"원";
+  };
+  const fmtNum=(v)=>{if(v==null||isNaN(v))return"—";return Number(v).toLocaleString("ko-KR");};
+  const fmtBig=(v)=>{
+    if(!v)return"—";const n=Number(v);
+    if(n>=1e12)return`${(n/1e12).toFixed(1)}조`;
+    if(n>=1e8)return`${(n/1e8).toFixed(0)}억`;
+    if(n>=1e4)return`${(n/1e4).toFixed(0)}만`;
+    return n.toLocaleString("ko-KR");
+  };
+  const retColor=(v)=>v>0?"#5C7A5E":v<0?"#8B4049":"#7A7067";
+  const retFmt=(v)=>v==null?"—":`${v>0?"+":""}${v.toFixed(2)}%`;
+  const ranges=[{key:"1mo",label:"1개월"},{key:"3mo",label:"3개월"},{key:"6mo",label:"6개월"},{key:"1y",label:"1년"},{key:"5y",label:"5년"}];
+
+  return(
+    <div style={{padding:"28px 48px",minHeight:"60vh"}}>
+      {/* 검색 */}
+      <div style={{position:"relative",maxWidth:520,marginBottom:28}}>
+        <div style={{position:"relative"}}>
+          <input type="text" value={query} onChange={e=>onInput(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter"&&results.length>0){const r=results[0];selectSymbol(r.symbol,r.name,r.code);}}}
+            placeholder="종목명 또는 종목코드 검색 (예: 삼성전자, 005930)"
+            style={{width:"100%",padding:"12px 16px 12px 40px",background:"#fff",border:"1px solid #D6CEC4",borderRadius:8,fontSize:14,fontFamily:"'Noto Sans KR'",color:"#1A1A1A",outline:"none"}}/>
+          <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:16,color:"#9E958C",pointerEvents:"none"}}>🔍</span>
+        </div>
+        {searching&&<div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,marginTop:4,padding:16,textAlign:"center",fontSize:12,color:"#9E958C",zIndex:50}}>검색 중...</div>}
+        {results.length>0&&(
+          <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,marginTop:4,maxHeight:360,overflowY:"auto",zIndex:50,boxShadow:"0 8px 32px rgba(0,0,0,0.08)"}}>
+            {results.map((r,i)=>(
+              <div key={i} onClick={()=>selectSymbol(r.symbol,r.name,r.code)}
+                style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 16px",cursor:"pointer",borderBottom:"1px solid #F0EDE8",transition:"background 0.15s"}}
+                onMouseEnter={e=>e.currentTarget.style.background="#FAF8F5"}
+                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{fontFamily:"'DM Mono'",fontSize:12,color:"#A0785A",fontWeight:600,background:"rgba(160,120,90,0.08)",padding:"2px 8px",borderRadius:3}}>{r.code}</span>
+                  <span style={{fontSize:13,color:"#1A1A1A",fontWeight:500}}>{r.name}</span>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <span style={{fontSize:10,color:"#9E958C",fontFamily:"'DM Mono'"}}>{r.sector}</span>
+                  <span style={{fontSize:9,color:r.market==="KOSDAQ"?"#A0785A":"#5C7A5E",background:r.market==="KOSDAQ"?"rgba(160,120,90,0.08)":"rgba(92,122,94,0.08)",padding:"2px 6px",borderRadius:3,fontWeight:600}}>{r.market}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {error&&<div style={{background:"rgba(139,64,73,0.06)",border:"1px solid rgba(139,64,73,0.2)",borderRadius:8,padding:"12px 16px",marginBottom:20,fontSize:12,color:"#8B4049"}}>{error}</div>}
+
+      {loading&&<div style={{textAlign:"center",padding:60,color:"#A0785A",fontSize:13}}>
+        <div style={{marginBottom:8}}>데이터 로딩 중...</div>
+        <div style={{fontSize:11,color:"#9E958C"}}>{selected?.name}</div>
+      </div>}
+
+      {!loading&&selected&&quote&&(
+        <div style={{animation:"fadeIn 0.3s ease"}}>
+          {/* 가격 헤더 */}
+          <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"24px 28px",marginBottom:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                  <span style={{fontFamily:"'DM Mono'",fontSize:12,color:"#A0785A",background:"rgba(160,120,90,0.08)",padding:"3px 10px",borderRadius:4,fontWeight:600}}>{selected.code}</span>
+                  <span style={{fontSize:10,color:quote.exchange?.includes("KOSDAQ")?"#A0785A":"#5C7A5E",background:quote.exchange?.includes("KOSDAQ")?"rgba(160,120,90,0.08)":"rgba(92,122,94,0.08)",padding:"2px 8px",borderRadius:3,fontWeight:600}}>{quote.exchange||"KRX"}</span>
+                </div>
+                <div style={{fontSize:22,color:"#1A1A1A",fontWeight:700,marginBottom:2}}>{quote.name||selected.name}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                {quote.price!=null&&(
+                  <>
+                    <div style={{fontFamily:"'DM Mono'",fontSize:34,color:"#1A1A1A",fontWeight:700,letterSpacing:-1}}>{fmtNum(quote.price)}<span style={{fontSize:14,color:"#9E958C",fontWeight:400,marginLeft:4}}>원</span></div>
+                    <div style={{fontFamily:"'DM Mono'",fontSize:14,color:retColor(quote.change),marginTop:4}}>
+                      {quote.change!=null&&`${quote.change>0?"+":""}${fmtNum(quote.change)}`}
+                      {quote.changePercent!=null&&` (${quote.changePercent>0?"+":""}${(quote.changePercent*100).toFixed(2)}%)`}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 기본 정보 카드 */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10,marginBottom:20}}>
+            {[
+              {label:"시가",value:fmtKRW(quote.open)},
+              {label:"고가",value:fmtKRW(quote.high)},
+              {label:"저가",value:fmtKRW(quote.low)},
+              {label:"전일종가",value:fmtKRW(quote.prevClose)},
+              {label:"거래량",value:fmtBig(quote.volume)+"주"},
+              {label:"시가총액",value:fmtBig(quote.marketCap)},
+              {label:"PER",value:quote.peRatio?Number(quote.peRatio).toFixed(1)+"배":"—"},
+              {label:"PBR",value:quote.pbRatio?Number(quote.pbRatio).toFixed(2)+"배":"—"},
+              {label:"EPS",value:quote.eps?fmtKRW(quote.eps):"—"},
+              {label:"배당수익률",value:quote.dividendYield?(Number(quote.dividendYield)*100).toFixed(2)+"%":"—"},
+              {label:"52주 최고",value:fmtKRW(quote.week52High)},
+              {label:"52주 최저",value:fmtKRW(quote.week52Low)},
+            ].map((item,i)=>(
+              <div key={i} style={{background:"#FAF8F5",border:"1px solid #E8E2DA",borderRadius:8,padding:"10px 14px"}}>
+                <div style={{fontSize:10,color:"#9E958C",marginBottom:4,letterSpacing:0.5}}>{item.label}</div>
+                <div style={{fontFamily:"'DM Mono'",fontSize:13,color:"#2D2926",fontWeight:500}}>{item.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* 주가 차트 */}
+          {chartData.length>0&&(
+            <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div style={{fontSize:15,fontWeight:700,color:"#1A1A1A"}}>주가 차트</div>
+                <div style={{display:"flex",gap:4}}>
+                  {ranges.map(r=>(
+                    <button key={r.key} className={`gb ${chartRange===r.key?"on":""}`} onClick={()=>changeRange(r.key)}>{r.label}</button>
+                  ))}
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={360}>
+                <LineChart data={chartData} margin={{top:5,right:10,bottom:5,left:10}}>
+                  <CartesianGrid stroke="rgba(26,35,50,0.06)"/>
+                  <XAxis dataKey="date" tick={{fill:"#9E958C",fontSize:10,fontFamily:"'DM Mono'"}} tickLine={false} axisLine={{stroke:"rgba(26,26,26,0.1)"}} interval={Math.max(0,Math.floor(chartData.length/8))}
+                    tickFormatter={d=>{const[y,m]=d.split("-");return`${y.slice(2)}.${m}`;}}/>
+                  <YAxis tick={{fill:"#9E958C",fontSize:11,fontFamily:"'DM Mono'"}} tickLine={false} axisLine={false} domain={["auto","auto"]}
+                    tickFormatter={v=>v>=10000?`${(v/10000).toFixed(0)}만`:`${fmtNum(v)}`}/>
+                  <Tooltip contentStyle={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,fontFamily:"'DM Mono'",fontSize:12}} labelStyle={{color:"#7A7067"}} formatter={(v)=>[fmtKRW(v),"주가"]}/>
+                  <Line type="monotone" dataKey="price" stroke="#A0785A" strokeWidth={2} dot={false}/>
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* 수익률 분석 */}
+          <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px"}}>
+            <div style={{fontSize:15,fontWeight:700,color:"#1A1A1A",marginBottom:14}}>기간별 수익률</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(105px,1fr))",gap:10}}>
+              {[
+                {label:"1일",value:returns.d1},
+                {label:"1주",value:returns.w1},
+                {label:"1개월",value:returns.m1},
+                {label:"3개월",value:returns.m3},
+                {label:"6개월",value:returns.m6},
+                {label:"1년",value:returns.y1},
+                {label:"YTD",value:returns.ytd},
+              ].map((item,i)=>(
+                <div key={i} style={{background:"#FAF8F5",border:"1px solid #E8E2DA",borderRadius:8,padding:"12px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#9E958C",marginBottom:6}}>{item.label}</div>
+                  <div style={{fontFamily:"'DM Mono'",fontSize:16,fontWeight:600,color:retColor(item.value)}}>{retFmt(item.value)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!loading&&!selected&&!error&&(
+        <div style={{textAlign:"center",padding:"80px 20px",color:"#9E958C"}}>
+          <div style={{fontSize:40,marginBottom:16}}>🇰🇷</div>
+          <div style={{fontSize:16,fontWeight:600,color:"#7A7067",marginBottom:10}}>한국 종목을 검색해보세요</div>
+          <div style={{fontSize:12,lineHeight:2,maxWidth:360,margin:"0 auto"}}>
+            종목명: 삼성전자, 카카오, SK하이닉스...<br/>
+            종목코드: 005930, 035420, 000660...<br/>
+            섹터: 반도체, 바이오, 게임, ETF...<br/>
+            <span style={{color:"#A0785A",fontSize:11}}>KOSPI · KOSDAQ · ETF 지원</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
    MAIN
    ═══════════════════════════════════════════════ */
 function App(){
   const[loaded,setLoaded]=useState(false);
   const[loadError,setLoadError]=useState(null);
   const[dataMeta,setDataMeta]=useState(null);
+  const[activeTab,setActiveTab]=useState("backtest");
   const[selRegion,setSelRegion]=useState("US");
   const[selModels,setSelModels]=useState(["us_allweather","us_6040"]);
   const[rebal,setRebal]=useState("annual");
@@ -325,8 +583,23 @@ function App(){
         </div>
         <DataBadge meta={dataMeta}/>
       </div>
+      {/* ── TAB NAV ── */}
+      <div style={{display:"flex",gap:0,marginTop:20,borderBottom:"none"}}>
+        {[{key:"backtest",label:"자산배분 백테스트",icon:"⚖️"},{key:"stock",label:"한국 종목 탐색",icon:"🇰🇷"}].map(tab=>(
+          <button key={tab.key} onClick={()=>setActiveTab(tab.key)}
+            style={{padding:"10px 24px",fontSize:13,fontWeight:activeTab===tab.key?700:400,color:activeTab===tab.key?"#A0785A":"#9E958C",background:activeTab===tab.key?"#fff":"transparent",border:"1px solid "+(activeTab===tab.key?"#D6CEC4":"transparent"),borderBottom:activeTab===tab.key?"1px solid #fff":"1px solid #D6CEC4",borderRadius:"8px 8px 0 0",cursor:"pointer",fontFamily:"'Noto Sans KR'",marginBottom:-1,transition:"all 0.2s"}}>
+            {tab.icon} {tab.label}
+          </button>
+        ))}
+        <div style={{flex:1,borderBottom:"1px solid #D6CEC4",marginBottom:-1}}/>
+      </div>
     </header>
 
+    {/* ── STOCK EXPLORER TAB ── */}
+    {activeTab==="stock"&&<StockExplorer/>}
+
+    {/* ── BACKTEST TAB ── */}
+    {activeTab==="backtest"&&(<>
     <div style={S.controls}>
       <div style={S.cg}><div style={S.cl}>지역</div><div style={S.cr}>{Object.entries(REGIONS).map(([k,v])=><button key={k} className={`rg ${selRegion===k?"on":""}`} onClick={()=>switchRegion(k)}>{v}</button>)}</div></div>
       <div style={S.cg}><div style={S.cl}>모델 (최대 6)</div><div style={S.cr}>{regionModels.map(([k,m])=><button key={k} className={`cb ${selModels.includes(k)?"on":""}`} style={{"--ac":m.color,"--ac-bg":m.color+"15"}} onClick={()=>toggleModel(k)}><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:m.color,marginRight:6}}/>{m.name}</button>)}</div></div>
@@ -505,6 +778,7 @@ function App(){
       ※ <code style={{fontSize:10,background:"#FAF8F5",padding:"1px 4px",borderRadius:2}}>python fetch_data.py</code> 실행으로 data.json 갱신 | {dataMeta?.generated} 기준
     </div></div>
     </>)}</div>
+    </>)}{/* end backtest tab */}</div>
   );
 }
 
