@@ -217,7 +217,7 @@ function TrendFollowing({trendState,setTrendState}){
   const[kospiHist,setKospiHist]=useState(null);
   const searchRef=useRef(null);
 
-  const doSearch=async(q)=>{if(!q)return setSearchResults([]);try{const r=await fetch(`${WORKER_URL}/api/search?q=${encodeURIComponent(q)}`);const d=await r.json();setSearchResults(d.results||[]);}catch(e){}};
+  const doSearch=async(q)=>{if(!q)return setSearchResults([]);try{const r=await fetch(`${WORKER_URL}/api/search?q=${encodeURIComponent(q)}&region=${st.region}`);const d=await r.json();setSearchResults(d.results||[]);}catch(e){}};
   const onSearchInput=(v)=>{setSearchQ(v);clearTimeout(searchRef.current);if(v.length>=1)searchRef.current=setTimeout(()=>doSearch(v),300);else setSearchResults([]);};
 
   const selectStock=async(symbol,name,code)=>{
@@ -404,28 +404,11 @@ function TrendFollowing({trendState,setTrendState}){
   },[st.timeframe]);
 
   // ── 스크리너: 전체 종목 일괄 분석 ──
-  const runScreener=async()=>{
-    set("screenerLoading",true);set("screenerResults",null);
-    try{
-      const range=intervalToRange(st.timeframe);
-      const res=await fetch(`${WORKER_URL}/api/screener?range=${range}&interval=${st.timeframe}`);
-      const data=await res.json();
-      // KOSPI 데이터도 가져오기 (RS 계산용)
-      const kRes=await fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent("^KS11")}&range=${range}&interval=${st.timeframe}`).then(r=>r.json());
-      setKospiHist(kRes.history||[]);
-      // 각 종목에 대해 시그널 계산
-      const results=(data.stocks||[]).map(s=>{
-        if(!s.history||s.history.length<200)return null;
-        const sig=evaluateSignals(s.history,kRes.history||[]);
-        return{...s,signals:sig.signals,scores:sig.scores,totalScore:sig.totalScore,maxScore:sig.maxScore,buySignal:sig.buySignal,currentPrice:s.history[s.history.length-1]?.adjClose||s.history[s.history.length-1]?.close,details:sig.details};
-      }).filter(Boolean);
-      set("screenerResults",results);
-    }catch(e){set("error","스크리너 실행 실패");}
-    set("screenerLoading",false);
-  };
+  // runScreener removed — replaced by runScreenerWith above
 
   // 시그널 평가 함수 (단일 종목 최신 시점)
-  const evaluateSignals=(hist,kHist)=>{
+  const evaluateSignals=(hist,kHist,strats)=>{
+    const activeS=strats||st.activeStrats;
     if(hist.length<200)return{signals:{},scores:{},totalScore:0,maxScore:0,buySignal:false,details:{}};
     const prices=hist.map(d=>d.adjClose||d.close);
     const ma5=calcMA(hist,5),ma20=calcMA(hist,20),ma60=calcMA(hist,60),ma120=calcMA(hist,120),ma200=calcMA(hist,200),ma150=calcMA(hist,150);
@@ -489,7 +472,7 @@ function TrendFollowing({trendState,setTrendState}){
       details.momentum=ret.toFixed(1);
     }
 
-    const active=st.activeStrats;
+    const active=activeS;
     const activeScores=active.map(k=>scores[k]).filter(v=>v!=null);
     const totalScore=activeScores.reduce((a,b)=>a+Math.max(0,b),0);
     const maxScore=activeScores.length;
@@ -503,19 +486,61 @@ function TrendFollowing({trendState,setTrendState}){
     {key:"1wk",label:"주봉"},{key:"1mo",label:"월봉"},
   ];
 
+  // 전략 변경 시 자동 스크리닝
+  const toggleStratAuto=(key)=>{
+    const next=st.activeStrats.includes(key)?st.activeStrats.filter(k=>k!==key):[...st.activeStrats,key];
+    set("activeStrats",next);
+    // 스크리너 모드면 자동 재실행 (딜레이)
+    if(st.mode==="screener"&&next.length>0){
+      clearTimeout(searchRef.current);
+      searchRef.current=setTimeout(()=>runScreenerWith(next),600);
+    }
+  };
+
+  const runScreenerWith=async(strats)=>{
+    set("screenerLoading",true);set("screenerResults",null);
+    try{
+      const range=intervalToRange(st.timeframe);
+      const res=await fetch(`${WORKER_URL}/api/screener?region=${st.region}&range=${range}&interval=${st.timeframe}`);
+      const data=await res.json();
+      const kRes=await fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent(st.region==="us"?"^GSPC":"^KS11")}&range=${range}&interval=${st.timeframe}`).then(r=>r.json());
+      setKospiHist(kRes.history||[]);
+      const tempStrats=strats||st.activeStrats;
+      const results=(data.stocks||[]).map(s=>{
+        if(!s.history||s.history.length<200)return null;
+        const sig=evaluateSignals(s.history,kRes.history||[],tempStrats);
+        return{...s,signals:sig.signals,scores:sig.scores,totalScore:sig.totalScore,maxScore:sig.maxScore,buySignal:sig.buySignal,currentPrice:s.history[s.history.length-1]?.adjClose||s.history[s.history.length-1]?.close,details:sig.details};
+      }).filter(Boolean);
+      set("screenerResults",results);
+    }catch(e){set("error","스크리너 실행 실패: "+e.message);}
+    set("screenerLoading",false);
+  };
+
   return(
     <div style={{padding:"28px 48px",minHeight:"60vh"}}>
-      {/* 모드 + 타임프레임 */}
+      {/* 모드 + 시장 + 타임프레임 */}
       <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:20,padding:"14px 20px",background:"#fff",border:"1px solid #E8E2DA",borderRadius:12}}>
+        {/* 모드 */}
         <div style={{display:"flex",gap:4,background:"#FAF8F5",padding:3,borderRadius:8}}>
-          {[{key:"single",label:"개별 분석"},{key:"screener",label:"전체 스크리닝"}].map(m=>(
+          {[{key:"screener",label:"📊 자동 스크리닝"},{key:"single",label:"🔍 개별 분석"}].map(m=>(
             <button key={m.key} onClick={()=>set("mode",m.key)}
-              style={{padding:"7px 16px",border:"none",borderRadius:6,fontSize:12,fontWeight:st.mode===m.key?700:500,
+              style={{padding:"7px 14px",border:"none",borderRadius:6,fontSize:12,fontWeight:st.mode===m.key?700:500,
                 background:st.mode===m.key?"#fff":"transparent",color:st.mode===m.key?"#A0785A":"#7A7067",
                 boxShadow:st.mode===m.key?"0 1px 3px rgba(0,0,0,0.05)":"none",cursor:"pointer",transition:"all 0.15s"}}>{m.label}</button>
           ))}
         </div>
         <div style={{height:24,width:1,background:"#E8E2DA"}}/>
+        {/* 시장 선택 */}
+        <div style={{display:"flex",gap:4,background:"#FAF8F5",padding:3,borderRadius:8}}>
+          {[{key:"kr",label:"🇰🇷 한국"},{key:"us",label:"🇺🇸 미국"}].map(r=>(
+            <button key={r.key} onClick={()=>{set("region",r.key);set("screenerResults",null);}}
+              style={{padding:"7px 14px",border:"none",borderRadius:6,fontSize:12,fontWeight:st.region===r.key?700:500,
+                background:st.region===r.key?"#fff":"transparent",color:st.region===r.key?"#5C7A5E":"#7A7067",
+                boxShadow:st.region===r.key?"0 1px 3px rgba(0,0,0,0.05)":"none",cursor:"pointer",transition:"all 0.15s"}}>{r.label}</button>
+          ))}
+        </div>
+        <div style={{height:24,width:1,background:"#E8E2DA"}}/>
+        {/* 타임프레임 */}
         <div style={{display:"flex",alignItems:"center",gap:6}}>
           <span style={{fontSize:11,color:"#9E958C"}}>타임프레임</span>
           <div style={{display:"flex",gap:3}}>
@@ -524,8 +549,6 @@ function TrendFollowing({trendState,setTrendState}){
             ))}
           </div>
         </div>
-        {(st.timeframe==="1m"||st.timeframe==="5m"||st.timeframe==="15m"||st.timeframe==="30m"||st.timeframe==="60m")&&
-          <div style={{fontSize:10,color:"#A0785A",background:"rgba(160,120,90,0.06)",padding:"4px 10px",borderRadius:4}}>⚠ 분봉은 한국 종목 데이터가 불안정할 수 있습니다</div>}
       </div>
 
       {/* 개별 분석 모드: 종목 검색 */}
@@ -557,11 +580,11 @@ function TrendFollowing({trendState,setTrendState}){
       {/* 스크리너 모드: 실행 버튼 */}
       {st.mode==="screener"&&(
       <div style={{marginBottom:20}}>
-        <button onClick={runScreener} disabled={st.screenerLoading}
+        <button onClick={()=>runScreenerWith()} disabled={st.screenerLoading}
           style={{padding:"12px 24px",background:st.screenerLoading?"#D6CEC4":"#A0785A",color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:st.screenerLoading?"wait":"pointer",fontFamily:"'Noto Sans KR'"}}>
-          {st.screenerLoading?"🔍 분석 중... (60개 종목)":"📊 전체 종목 스크리닝 실행"}
+          {st.screenerLoading?`🔍 분석 중... (${st.region==="us"?"미국":"한국"} 종목)`:`📊 ${st.region==="us"?"미국":"한국"} 전체 스크리닝 실행`}
         </button>
-        <span style={{marginLeft:12,fontSize:11,color:"#9E958C"}}>※ 60개 한국 주요 종목을 분석합니다 (30초~1분 소요)</span>
+        <span style={{marginLeft:12,fontSize:11,color:"#9E958C"}}>※ {st.region==="us"?"미국 S&P500 + ETF ~130":"한국 KOSPI/KOSDAQ ~130"}개 종목 분석 (30초~1분)</span>
       </div>
       )}
 
@@ -573,7 +596,7 @@ function TrendFollowing({trendState,setTrendState}){
           {STRATEGIES.map(s=>{
             const active=st.activeStrats.includes(s.key);
             return(
-              <div key={s.key} onClick={()=>toggleStrat(s.key)}
+              <div key={s.key} onClick={()=>toggleStratAuto(s.key)}
                 style={{padding:"10px 14px",borderRadius:8,cursor:"pointer",border:`1px solid ${active?s.color+"60":"#E8E2DA"}`,background:active?s.color+"08":"#FAF8F5",transition:"all 0.15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                   <span style={{width:8,height:8,borderRadius:2,background:active?s.color:"#D6CEC4"}}/>
@@ -1306,7 +1329,7 @@ function App(){
     chartMode:"price",
   });
   const[trendState,setTrendState]=useState({
-    mode:"single",timeframe:"1d",
+    mode:"screener",region:"kr",timeframe:"1d",
     selected:null,history:[],loading:false,error:null,
     maShort:5,maLong:60,momPeriod:60,breakoutK:0.5,
     activeStrats:["maCross","maAlign","minervini","rs","momentum"],
