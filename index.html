@@ -194,146 +194,201 @@ function stats(results,init){
 }
 
 /* ═══════════════════════════════════════════════
-   TREND FOLLOWING — 추세추종 전략 탭
-   이동평균 크로스 / 듀얼 모멘텀 / 변동성 돌파
+   TREND FOLLOWING — 멀티 전략 추세추종 + 백테스트
+   MA크로스 / MA정배열 / 미너비니 / RS / 볼린저 / 변동성돌파 / 모멘텀
    ═══════════════════════════════════════════════ */
-const STRAT_COLORS={ma:"#A0785A",momentum:"#5C7A5E",breakout:"#8B4049"};
+const STRATEGIES=[
+  {key:"maCross",name:"MA 크로스",desc:"단기MA가 장기MA를 상향돌파 시 매수, 하향돌파 시 매도",color:"#A0785A"},
+  {key:"maAlign",name:"MA 정배열",desc:"5>20>60>120>200일선 순서로 정배열 시 매수",color:"#7A6040"},
+  {key:"minervini",name:"미너비니 Trend Template",desc:"200일선 우상향, 주가>150MA>200MA, 52주저점+30%↑, 52주고점-25%↓",color:"#5C7A5E"},
+  {key:"rs",name:"RS 상대강도",desc:"KOSPI 대비 상대강도가 양수이면 매수",color:"#6B8CA0"},
+  {key:"bollinger",name:"볼린저 밴드 돌파",desc:"주가가 상단밴드(2σ)를 돌파하면 매수",color:"#9E7080"},
+  {key:"breakout",name:"변동성 돌파",desc:"전일 레인지×K 돌파 시 매수 (래리 윌리엄스)",color:"#8B4049"},
+  {key:"momentum",name:"듀얼 모멘텀",desc:"N일 수익률이 양수이면 매수, 음수이면 현금",color:"#7A6B5D"},
+];
 
 function TrendFollowing({trendState,setTrendState}){
   const st=trendState;
   const set=(k,v)=>setTrendState(p=>({...p,[k]:v}));
+  const toggleStrat=(key)=>set("activeStrats",st.activeStrats.includes(key)?st.activeStrats.filter(k=>k!==key):[...st.activeStrats,key]);
 
   const[searchQ,setSearchQ]=useState("");
   const[searchResults,setSearchResults]=useState([]);
+  const[kospiHist,setKospiHist]=useState(null);
   const searchRef=useRef(null);
 
-  const doSearch=async(q)=>{
-    if(!q)return setSearchResults([]);
-    try{const r=await fetch(`${WORKER_URL}/api/search?q=${encodeURIComponent(q)}`);const d=await r.json();setSearchResults(d.results||[]);}catch(e){}
-  };
+  const doSearch=async(q)=>{if(!q)return setSearchResults([]);try{const r=await fetch(`${WORKER_URL}/api/search?q=${encodeURIComponent(q)}`);const d=await r.json();setSearchResults(d.results||[]);}catch(e){}};
   const onSearchInput=(v)=>{setSearchQ(v);clearTimeout(searchRef.current);if(v.length>=1)searchRef.current=setTimeout(()=>doSearch(v),300);else setSearchResults([]);};
 
   const selectStock=async(symbol,name,code)=>{
     setSearchResults([]);setSearchQ(name+" ("+code+")");
     set("loading",true);set("error",null);set("selected",{symbol,name,code});
     try{
-      const hRes=await fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent(symbol)}&range=5y`).then(r=>r.json());
+      const[hRes,kRes]=await Promise.all([
+        fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent(symbol)}&range=5y`).then(r=>r.json()),
+        kospiHist?Promise.resolve(null):fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent("^KS11")}&range=5y`).then(r=>r.json())
+      ]);
       set("history",hRes.history||[]);
+      if(kRes)setKospiHist(kRes.history||[]);
     }catch(e){set("error","데이터를 불러올 수 없습니다.");}
     set("loading",false);
   };
 
-  // 이동평균 계산
-  const calcMA=(data,period)=>{
+  // ── 지표 계산 유틸 ──
+  const calcMA=(data,period)=>data.map((d,i)=>i<period-1?null:data.slice(i-period+1,i+1).reduce((a,b)=>a+(b.adjClose||b.close),0)/period);
+  const calcBB=(data,period=20,mult=2)=>{
+    const ma=calcMA(data,period);
     return data.map((d,i)=>{
-      if(i<period-1)return null;
-      const slice=data.slice(i-period+1,i+1);
-      return slice.reduce((a,b)=>a+(b.adjClose||b.close),0)/period;
+      if(ma[i]==null)return{upper:null,lower:null,mid:null};
+      const slice=data.slice(i-period+1,i+1).map(x=>x.adjClose||x.close);
+      const std=Math.sqrt(slice.reduce((a,v)=>a+Math.pow(v-ma[i],2),0)/period);
+      return{upper:ma[i]+mult*std,lower:ma[i]-mult*std,mid:ma[i]};
     });
   };
 
-  // ATR 계산
-  const calcATR=(data,period=20)=>{
-    const trs=data.map((d,i)=>{
-      if(i===0)return d.high-d.low;
-      const prev=data[i-1];
-      return Math.max(d.high-d.low,Math.abs(d.high-(prev.adjClose||prev.close)),Math.abs(d.low-(prev.adjClose||prev.close)));
-    });
-    return trs.map((tr,i)=>{
-      if(i<period-1)return null;
-      return trs.slice(i-period+1,i+1).reduce((a,b)=>a+b,0)/period;
-    });
-  };
-
-  // 전략 결과 계산
-  const strategyResults=useMemo(()=>{
+  // ── 전략 시그널 계산 ──
+  const strategyAnalysis=useMemo(()=>{
     const hist=st.history;
-    if(!hist||hist.length<60)return null;
-
+    if(!hist||hist.length<200)return null;
     const prices=hist.map(d=>d.adjClose||d.close);
-    const ma5=calcMA(hist,5);
-    const ma20=calcMA(hist,20);
-    const ma60=calcMA(hist,60);
-    const ma120=calcMA(hist,120);
-    const atr=calcATR(hist,20);
+    const ma5=calcMA(hist,5),ma20=calcMA(hist,20),ma60=calcMA(hist,60),ma120=calcMA(hist,120),ma200=calcMA(hist,200);
+    const ma150=calcMA(hist,150);
+    const bb=calcBB(hist,20,2);
 
-    // 1. 이동평균 크로스
-    const maCrossSignals=[];
-    const shortMA=st.maShort===5?ma5:ma20;
-    const longMA=st.maLong===60?ma60:ma120;
-    for(let i=1;i<hist.length;i++){
-      if(shortMA[i]!=null&&longMA[i]!=null&&shortMA[i-1]!=null&&longMA[i-1]!=null){
-        if(shortMA[i-1]<=longMA[i-1]&&shortMA[i]>longMA[i])maCrossSignals.push({date:hist[i].date,type:"golden",price:prices[i],idx:i});
-        if(shortMA[i-1]>=longMA[i-1]&&shortMA[i]<longMA[i])maCrossSignals.push({date:hist[i].date,type:"dead",price:prices[i],idx:i});
+    // 일별 전략 시그널 (1=매수, 0=중립, -1=매도)
+    const signals=hist.map((d,i)=>{
+      const p=prices[i];
+      const sig={date:d.date,price:p,scores:{}};
+
+      // 1. MA 크로스
+      const sMA=st.maShort===5?ma5:ma20;
+      const lMA=st.maLong===60?ma60:st.maLong===120?ma120:ma200;
+      if(sMA[i]!=null&&lMA[i]!=null)sig.scores.maCross=sMA[i]>lMA[i]?1:-1;
+
+      // 2. MA 정배열
+      if(ma5[i]&&ma20[i]&&ma60[i]&&ma120[i]&&ma200[i]){
+        const aligned=ma5[i]>ma20[i]&&ma20[i]>ma60[i]&&ma60[i]>ma120[i]&&ma120[i]>ma200[i];
+        const reverse=ma5[i]<ma20[i]&&ma20[i]<ma60[i]&&ma60[i]<ma120[i];
+        sig.scores.maAlign=aligned?1:reverse?-1:0;
       }
-    }
 
-    // 2. 듀얼 모멘텀 스코어
-    const momPeriod=st.momPeriod||60;
-    const momScores=hist.map((d,i)=>{
-      if(i<momPeriod)return null;
-      const ret=(prices[i]/prices[i-momPeriod]-1)*100;
-      return{date:d.date,score:ret,price:prices[i]};
-    }).filter(Boolean);
-
-    // 3. 변동성 돌파
-    const breakoutK=st.breakoutK||0.5;
-    const breakoutSignals=[];
-    for(let i=1;i<hist.length;i++){
-      const prev=hist[i-1];
-      const prevRange=prev.high-prev.low;
-      const target=(prev.adjClose||prev.close)+prevRange*breakoutK;
-      if(hist[i].high>=target){
-        breakoutSignals.push({date:hist[i].date,target:Math.round(target),price:prices[i],range:prevRange,idx:i});
+      // 3. 미너비니 Trend Template
+      if(ma150[i]&&ma200[i]&&i>=252){
+        const w52=prices.slice(Math.max(0,i-252),i+1);
+        const w52High=Math.max(...w52),w52Low=Math.min(...w52);
+        const ma200rising=ma200[i]>(ma200[Math.max(0,i-20)]||0);
+        const aboveMAs=p>ma150[i]&&ma150[i]>ma200[i];
+        const fromLow=(p/w52Low-1)>=0.3;
+        const fromHigh=(1-p/w52High)<=0.25;
+        const pass=ma200rising&&aboveMAs&&fromLow&&fromHigh;
+        sig.scores.minervini=pass?1:-1;
+        sig.minerviniDetail={ma200rising,aboveMAs,fromLow:((p/w52Low-1)*100).toFixed(1),fromHigh:((1-p/w52High)*100).toFixed(1)};
       }
+
+      // 4. RS 상대강도
+      if(kospiHist&&i>=60){
+        const kMap={};kospiHist.forEach(k=>{kMap[k.date]=k.adjClose||k.close;});
+        const today=kMap[d.date],past60=kMap[hist[Math.max(0,i-60)]?.date];
+        if(today&&past60){
+          const stockRet=(p/prices[Math.max(0,i-60)]-1)*100;
+          const kospiRet=(today/past60-1)*100;
+          const rs=stockRet-kospiRet;
+          sig.scores.rs=rs>0?1:rs<-5?-1:0;
+          sig.rsValue=rs;
+        }
+      }
+
+      // 5. 볼린저 밴드
+      if(bb[i].upper!=null){
+        sig.scores.bollinger=p>bb[i].upper?1:p<bb[i].lower?-1:0;
+        sig.bbUpper=bb[i].upper;sig.bbLower=bb[i].lower;sig.bbMid=bb[i].mid;
+      }
+
+      // 6. 변동성 돌파
+      if(i>0){
+        const prev=hist[i-1];
+        const prevRange=prev.high-prev.low;
+        const target=(prev.adjClose||prev.close)+prevRange*st.breakoutK;
+        sig.scores.breakout=d.high>=target?1:0;
+        sig.breakoutTarget=target;
+      }
+
+      // 7. 듀얼 모멘텀
+      if(i>=st.momPeriod){
+        const ret=(p/prices[i-st.momPeriod]-1)*100;
+        sig.scores.momentum=ret>0?1:-1;
+        sig.momValue=ret;
+      }
+
+      // 종합 점수
+      const active=st.activeStrats;
+      const activeScores=active.map(k=>sig.scores[k]).filter(v=>v!=null);
+      sig.totalScore=activeScores.reduce((a,b)=>a+Math.max(0,b),0);
+      sig.maxScore=activeScores.length;
+      sig.buySignal=st.conditionMode==="and"?activeScores.every(v=>v>=1):sig.totalScore>=st.minScore;
+      return sig;
+    });
+
+    // ── 백테스트 ──
+    let cash=st.initAmt,shares=0,position=false,buyPrice=0;
+    const equity=[],trades=[];
+    for(let i=200;i<signals.length;i++){
+      const sig=signals[i];
+      const p=sig.price;
+      if(!position&&sig.buySignal){
+        shares=Math.floor(cash/p);
+        if(shares>0){buyPrice=p;cash-=shares*p;position=true;trades.push({type:"buy",date:sig.date,price:p,score:sig.totalScore});}
+      }else if(position&&!sig.buySignal){
+        cash+=shares*p;const ret=(p/buyPrice-1)*100;
+        trades.push({type:"sell",date:sig.date,price:p,ret:ret.toFixed(1)});shares=0;position=false;
+      }
+      const totalValue=cash+(shares*p);
+      equity.push({date:sig.date,value:totalValue,price:p,score:sig.totalScore,buy:sig.buySignal});
     }
+    if(position)cash+=shares*signals[signals.length-1].price;
+    const finalValue=cash;
+
+    // 통계
+    const buyTrades=trades.filter(t=>t.type==="sell");
+    const wins=buyTrades.filter(t=>parseFloat(t.ret)>0).length;
+    const totalReturn=(finalValue/st.initAmt-1)*100;
+    const years=(signals.length-200)/252;
+    const cagr=years>0?(Math.pow(finalValue/st.initAmt,1/years)-1)*100:0;
+    let peak=st.initAmt,mdd=0;
+    equity.forEach(e=>{if(e.value>peak)peak=e.value;const dd=(peak-e.value)/peak;if(dd>mdd)mdd=dd;});
 
     // 차트 데이터
-    const step=Math.max(1,Math.floor(hist.length/300));
-    const chartData=hist.filter((_,i)=>i%step===0||i===hist.length-1).map((d,idx)=>{
-      const origIdx=hist.indexOf(d);
-      const pt={date:d.date,price:prices[origIdx]};
-      if(ma5[origIdx]!=null)pt.ma5=Math.round(ma5[origIdx]);
-      if(ma20[origIdx]!=null)pt.ma20=Math.round(ma20[origIdx]);
-      if(ma60[origIdx]!=null)pt.ma60=Math.round(ma60[origIdx]);
-      if(ma120[origIdx]!=null)pt.ma120=Math.round(ma120[origIdx]);
-      return pt;
-    });
+    const step=Math.max(1,Math.floor(equity.length/300));
+    const chartData=equity.filter((_,i)=>i%step===0||i===equity.length-1);
 
-    // 수익률 시뮬레이션 (MA 크로스 전략)
-    let position=false,buyPrice=0,totalReturn=0,wins=0,losses=0,trades=0;
-    for(const sig of maCrossSignals){
-      if(sig.type==="golden"&&!position){position=true;buyPrice=sig.price;}
-      if(sig.type==="dead"&&position){
-        const ret=(sig.price/buyPrice-1)*100;totalReturn+=ret;trades++;
-        if(ret>0)wins++;else losses++;position=false;
-      }
-    }
-    const winRate=trades>0?(wins/trades*100):0;
+    // 현재 상태 대시보드
+    const latest=signals[signals.length-1];
 
-    return{chartData,maCrossSignals,momScores,breakoutSignals,ma5,ma20,ma60,ma120,
-      maStats:{trades,winRate:winRate.toFixed(1),totalReturn:totalReturn.toFixed(1),wins,losses},
-      breakoutCount:breakoutSignals.length};
-  },[st.history,st.maShort,st.maLong,st.momPeriod,st.breakoutK]);
+    return{signals,equity,chartData,trades,latest,
+      stats:{totalReturn:totalReturn.toFixed(1),cagr:cagr.toFixed(2),mdd:(mdd*100).toFixed(1),
+        trades:buyTrades.length,winRate:buyTrades.length?(wins/buyTrades.length*100).toFixed(1):"0",
+        wins,losses:buyTrades.length-wins,finalValue:Math.round(finalValue)}};
+  },[st.history,st.activeStrats,st.conditionMode,st.minScore,st.maShort,st.maLong,st.breakoutK,st.momPeriod,st.initAmt,kospiHist]);
 
   const fmtNum=(v)=>{if(v==null)return"—";return Number(v).toLocaleString("ko-KR");};
   const fmtKRW=(v)=>{if(v==null)return"—";return Number(v).toLocaleString("ko-KR")+"원";};
+  const retColor=(v)=>v>0?"#5C7A5E":v<0?"#8B4049":"#7A7067";
 
   return(
     <div style={{padding:"28px 48px",minHeight:"60vh"}}>
       {/* 종목 검색 */}
-      <div style={{display:"flex",gap:16,alignItems:"flex-start",flexWrap:"wrap",marginBottom:24}}>
-        <div style={{position:"relative",width:380}}>
+      <div style={{display:"flex",gap:16,alignItems:"flex-start",flexWrap:"wrap",marginBottom:20}}>
+        <div style={{position:"relative",width:360}}>
           <input type="text" value={searchQ} onChange={e=>onSearchInput(e.target.value)}
             onKeyDown={e=>{if(e.key==="Enter"&&searchResults.length>0){const r=searchResults[0];selectStock(r.symbol,r.name,r.code);}}}
             placeholder="종목 선택 (예: 삼성전자, 005930)"
             style={{width:"100%",padding:"11px 16px 11px 38px",background:"#fff",border:"1px solid #D6CEC4",borderRadius:8,fontSize:13,fontFamily:"'Noto Sans KR'",color:"#1A1A1A",outline:"none"}}/>
           <span style={{position:"absolute",left:13,top:"50%",transform:"translateY(-50%)",fontSize:14,color:"#9E958C",pointerEvents:"none"}}>🔍</span>
           {searchResults.length>0&&(
-            <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,marginTop:4,maxHeight:300,overflowY:"auto",zIndex:50,boxShadow:"0 8px 32px rgba(0,0,0,0.08)"}}>
+            <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,marginTop:4,maxHeight:280,overflowY:"auto",zIndex:50,boxShadow:"0 8px 32px rgba(0,0,0,0.08)"}}>
               {searchResults.map((r,i)=>(
                 <div key={i} onClick={()=>selectStock(r.symbol,r.name,r.code)}
-                  style={{display:"flex",justifyContent:"space-between",padding:"10px 16px",cursor:"pointer",borderBottom:"1px solid #F0EDE8"}}
+                  style={{display:"flex",justifyContent:"space-between",padding:"9px 16px",cursor:"pointer",borderBottom:"1px solid #F0EDE8"}}
                   onMouseEnter={e=>e.currentTarget.style.background="#FAF8F5"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                   <div><span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#A0785A",fontWeight:600,marginRight:8}}>{r.code}</span><span style={{fontSize:13,fontWeight:500}}>{r.name}</span></div>
                   <span style={{fontSize:9,color:r.market==="KOSDAQ"?"#A0785A":"#5C7A5E",fontWeight:600}}>{r.market}</span>
@@ -342,115 +397,147 @@ function TrendFollowing({trendState,setTrendState}){
             </div>
           )}
         </div>
-        {/* 전략 파라미터 */}
-        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
-          <div style={{fontSize:11,color:"#9E958C"}}>MA 단기</div>
-          <select value={st.maShort} onChange={e=>set("maShort",+e.target.value)} style={{padding:"6px 10px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:12,fontFamily:"'DM Mono'"}}>
-            <option value={5}>5일</option><option value={20}>20일</option>
-          </select>
-          <div style={{fontSize:11,color:"#9E958C"}}>MA 장기</div>
-          <select value={st.maLong} onChange={e=>set("maLong",+e.target.value)} style={{padding:"6px 10px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:12,fontFamily:"'DM Mono'"}}>
-            <option value={60}>60일</option><option value={120}>120일</option>
-          </select>
-          <div style={{fontSize:11,color:"#9E958C"}}>돌파 K</div>
-          <select value={st.breakoutK} onChange={e=>set("breakoutK",+e.target.value)} style={{padding:"6px 10px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:12,fontFamily:"'DM Mono'"}}>
-            <option value={0.3}>0.3</option><option value={0.5}>0.5</option><option value={0.7}>0.7</option>
-          </select>
+        {st.selected&&<div style={{padding:"8px 16px",background:"rgba(160,120,90,0.08)",borderRadius:8,fontSize:14,fontWeight:600,color:"#A0785A"}}>{st.selected.name}</div>}
+      </div>
+
+      {/* 전략 빌더 */}
+      <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>전략 빌더</div>
+        <div style={{fontSize:11,color:"#9E958C",marginBottom:14}}>사용할 전략을 선택하고 조건을 설정하세요</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8,marginBottom:16}}>
+          {STRATEGIES.map(s=>{
+            const active=st.activeStrats.includes(s.key);
+            return(
+              <div key={s.key} onClick={()=>toggleStrat(s.key)}
+                style={{padding:"10px 14px",borderRadius:8,cursor:"pointer",border:`1px solid ${active?s.color+"60":"#E8E2DA"}`,background:active?s.color+"08":"#FAF8F5",transition:"all 0.15s"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                  <span style={{width:8,height:8,borderRadius:2,background:active?s.color:"#D6CEC4"}}/>
+                  <span style={{fontSize:12,fontWeight:600,color:active?s.color:"#7A7067"}}>{s.name}</span>
+                </div>
+                <div style={{fontSize:10,color:"#9E958C",lineHeight:1.4}}>{s.desc}</div>
+              </div>
+            );
+          })}
+        </div>
+        {/* 파라미터 & 조건 */}
+        <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center",padding:"12px 0",borderTop:"1px solid #F0EDE8"}}>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{fontSize:11,color:"#9E958C"}}>매수 조건</span>
+            <select value={st.conditionMode} onChange={e=>set("conditionMode",e.target.value)} style={{padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}>
+              <option value="and">모든 조건 충족 (AND)</option>
+              <option value="score">N개 이상 충족</option>
+            </select>
+            {st.conditionMode==="score"&&<input type="number" value={st.minScore} onChange={e=>set("minScore",+e.target.value)} min={1} max={7} style={{width:50,padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}/>}
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{fontSize:11,color:"#9E958C"}}>MA단기</span>
+            <select value={st.maShort} onChange={e=>set("maShort",+e.target.value)} style={{padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}><option value={5}>5</option><option value={20}>20</option></select>
+            <span style={{fontSize:11,color:"#9E958C"}}>MA장기</span>
+            <select value={st.maLong} onChange={e=>set("maLong",+e.target.value)} style={{padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}><option value={60}>60</option><option value={120}>120</option><option value={200}>200</option></select>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{fontSize:11,color:"#9E958C"}}>돌파K</span>
+            <select value={st.breakoutK} onChange={e=>set("breakoutK",+e.target.value)} style={{padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}><option value={0.3}>0.3</option><option value={0.5}>0.5</option><option value={0.7}>0.7</option></select>
+            <span style={{fontSize:11,color:"#9E958C"}}>모멘텀</span>
+            <select value={st.momPeriod} onChange={e=>set("momPeriod",+e.target.value)} style={{padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}><option value={20}>20일</option><option value={60}>60일</option><option value={120}>120일</option></select>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{fontSize:11,color:"#9E958C"}}>초기자금</span>
+            <input type="number" value={st.initAmt} onChange={e=>set("initAmt",+e.target.value)} style={{width:100,padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}/>
+            <span style={{fontSize:10,color:"#9E958C"}}>원</span>
+          </div>
         </div>
       </div>
 
       {st.error&&<div style={{background:"rgba(139,64,73,0.06)",border:"1px solid rgba(139,64,73,0.2)",borderRadius:8,padding:"12px 16px",marginBottom:20,fontSize:12,color:"#8B4049"}}>{st.error}</div>}
       {st.loading&&<div style={{textAlign:"center",padding:60,color:"#A0785A",fontSize:13}}>데이터 로딩 중...</div>}
 
-      {!st.loading&&strategyResults&&(
+      {!st.loading&&strategyAnalysis&&(
         <div style={{animation:"fadeIn 0.3s ease"}}>
-          {/* MA 크로스 차트 */}
+          {/* 현재 전략 대시보드 */}
           <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div><div style={{fontSize:15,fontWeight:700}}>이동평균선 크로스</div>
-                <div style={{fontSize:11,color:"#9E958C",marginTop:2}}>{st.selected?.name} · MA{st.maShort} × MA{st.maLong} · 🟢 골든크로스 🔴 데드크로스</div></div>
-              <div style={{display:"flex",gap:8}}>
-                <div style={{background:"rgba(92,122,94,0.08)",padding:"6px 12px",borderRadius:6,fontSize:12,fontFamily:"'DM Mono'"}}>
-                  <span style={{color:"#9E958C"}}>승률 </span><span style={{color:"#5C7A5E",fontWeight:600}}>{strategyResults.maStats.winRate}%</span>
-                </div>
-                <div style={{background:"rgba(160,120,90,0.08)",padding:"6px 12px",borderRadius:6,fontSize:12,fontFamily:"'DM Mono'"}}>
-                  <span style={{color:"#9E958C"}}>누적 </span><span style={{color:Number(strategyResults.maStats.totalReturn)>0?"#5C7A5E":"#8B4049",fontWeight:600}}>{strategyResults.maStats.totalReturn}%</span>
-                </div>
-                <div style={{background:"#FAF8F5",padding:"6px 12px",borderRadius:6,fontSize:12,fontFamily:"'DM Mono'"}}>
-                  <span style={{color:"#9E958C"}}>매매 </span><span style={{fontWeight:600}}>{strategyResults.maStats.trades}회</span>
-                </div>
+              <div><div style={{fontSize:15,fontWeight:700}}>현재 시그널 대시보드</div>
+                <div style={{fontSize:11,color:"#9E958C"}}>최신 거래일 기준 · {strategyAnalysis.latest?.date}</div></div>
+              <div style={{padding:"8px 16px",borderRadius:8,fontSize:14,fontWeight:700,
+                background:strategyAnalysis.latest?.buySignal?"rgba(92,122,94,0.1)":"rgba(139,64,73,0.1)",
+                color:strategyAnalysis.latest?.buySignal?"#5C7A5E":"#8B4049"}}>
+                {strategyAnalysis.latest?.buySignal?"매수 시그널 🟢":"대기/매도 🔴"} ({strategyAnalysis.latest?.totalScore}/{strategyAnalysis.latest?.maxScore})
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={380}>
-              <LineChart data={strategyResults.chartData} margin={{top:5,right:10,bottom:5,left:10}}>
-                <CartesianGrid stroke="rgba(26,35,50,0.06)"/>
-                <XAxis dataKey="date" tick={{fill:"#9E958C",fontSize:10,fontFamily:"'DM Mono'"}} tickLine={false} axisLine={{stroke:"rgba(26,26,26,0.1)"}} interval={Math.max(0,Math.floor(strategyResults.chartData.length/8))}
-                  tickFormatter={d=>{const[y,m]=d.split("-");return`${y.slice(2)}.${m}`;}}/>
-                <YAxis tick={{fill:"#9E958C",fontSize:11,fontFamily:"'DM Mono'"}} tickLine={false} axisLine={false} domain={["auto","auto"]}
-                  tickFormatter={v=>v>=10000?`${(v/10000).toFixed(0)}만`:fmtNum(v)}/>
-                <Tooltip contentStyle={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,fontFamily:"'DM Mono'",fontSize:11}} formatter={(v,name)=>[fmtKRW(v),name==="price"?"주가":name]}/>
-                <Line type="monotone" dataKey="price" stroke="#2D2926" strokeWidth={1.5} dot={false} name="주가"/>
-                {st.maShort===5&&<Line type="monotone" dataKey="ma5" stroke="#A0785A" strokeWidth={1} dot={false} strokeDasharray="4 2" name="MA5"/>}
-                {st.maShort===20&&<Line type="monotone" dataKey="ma20" stroke="#A0785A" strokeWidth={1} dot={false} strokeDasharray="4 2" name="MA20"/>}
-                {st.maLong===60&&<Line type="monotone" dataKey="ma60" stroke="#5C7A5E" strokeWidth={1} dot={false} name="MA60"/>}
-                {st.maLong===120&&<Line type="monotone" dataKey="ma120" stroke="#5C7A5E" strokeWidth={1} dot={false} name="MA120"/>}
-              </LineChart>
-            </ResponsiveContainer>
-            {/* 시그널 목록 */}
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
-              {strategyResults.maCrossSignals.slice(-20).map((sig,i)=>(
-                <div key={i} style={{fontSize:10,fontFamily:"'DM Mono'",padding:"4px 8px",borderRadius:4,
-                  background:sig.type==="golden"?"rgba(92,122,94,0.08)":"rgba(139,64,73,0.08)",
-                  color:sig.type==="golden"?"#5C7A5E":"#8B4049"}}>
-                  {sig.type==="golden"?"🟢":"🔴"} {sig.date} {fmtKRW(sig.price)}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8}}>
+              {STRATEGIES.filter(s=>st.activeStrats.includes(s.key)).map(s=>{
+                const score=strategyAnalysis.latest?.scores[s.key];
+                const detail=s.key==="rs"?`RS: ${strategyAnalysis.latest?.rsValue?.toFixed(1)||"—"}`:
+                  s.key==="momentum"?`${strategyAnalysis.latest?.momValue?.toFixed(1)||"—"}%`:
+                  s.key==="minervini"?`저점+${strategyAnalysis.latest?.minerviniDetail?.fromLow||"—"}% 고점-${strategyAnalysis.latest?.minerviniDetail?.fromHigh||"—"}%`:"";
+                return(
+                  <div key={s.key} style={{padding:"10px 14px",borderRadius:8,border:`1px solid ${score>=1?s.color+"40":"#E8E2DA"}`,background:score>=1?s.color+"08":"#FAF8F5"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <span style={{fontSize:11,fontWeight:600,color:s.color}}>{s.name}</span>
+                      <span style={{fontSize:16}}>{score>=1?"✅":score<=-1?"❌":"⏸️"}</span>
+                    </div>
+                    {detail&&<div style={{fontSize:10,color:"#7A7067",fontFamily:"'DM Mono'"}}>{detail}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 백테스트 성과 */}
+          <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:14}}>백테스트 결과</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10,marginBottom:20}}>
+              {[
+                {label:"총 수익률",value:`${strategyAnalysis.stats.totalReturn}%`,color:retColor(parseFloat(strategyAnalysis.stats.totalReturn))},
+                {label:"CAGR",value:`${strategyAnalysis.stats.cagr}%`,color:"#A0785A"},
+                {label:"MDD",value:`-${strategyAnalysis.stats.mdd}%`,color:"#8B4049"},
+                {label:"매매 횟수",value:`${strategyAnalysis.stats.trades}회`},
+                {label:"승률",value:`${strategyAnalysis.stats.winRate}%`,color:parseFloat(strategyAnalysis.stats.winRate)>50?"#5C7A5E":"#8B4049"},
+                {label:"승/패",value:`${strategyAnalysis.stats.wins}/${strategyAnalysis.stats.losses}`},
+                {label:"최종 자산",value:fmtKRW(strategyAnalysis.stats.finalValue),color:"#A0785A"},
+                {label:"초기 자금",value:fmtKRW(st.initAmt)},
+              ].map((item,i)=>(
+                <div key={i} style={{background:"#FAF8F5",border:"1px solid #E8E2DA",borderRadius:8,padding:"10px 14px"}}>
+                  <div style={{fontSize:10,color:"#9E958C",marginBottom:4}}>{item.label}</div>
+                  <div style={{fontFamily:"'DM Mono'",fontSize:14,fontWeight:600,color:item.color||"#2D2926"}}>{item.value}</div>
                 </div>
               ))}
             </div>
-          </div>
 
-          {/* 모멘텀 스코어 */}
-          <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
-            <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>듀얼 모멘텀 스코어</div>
-            <div style={{fontSize:11,color:"#9E958C",marginBottom:14}}>과거 {st.momPeriod}일 수익률 · 양수면 투자, 음수면 현금</div>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={strategyResults.momScores.filter((_,i)=>i%(Math.max(1,Math.floor(strategyResults.momScores.length/80)))===0)} margin={{top:5,right:10,bottom:5,left:10}}>
+            {/* 자산 곡선 */}
+            <ResponsiveContainer width="100%" height={350}>
+              <LineChart data={strategyAnalysis.chartData} margin={{top:5,right:10,bottom:5,left:10}}>
                 <CartesianGrid stroke="rgba(26,35,50,0.06)"/>
-                <XAxis dataKey="date" tick={{fill:"#9E958C",fontSize:9,fontFamily:"'DM Mono'"}} tickLine={false} interval={Math.max(0,Math.floor(strategyResults.momScores.length/80/8))}
+                <XAxis dataKey="date" tick={{fill:"#9E958C",fontSize:10,fontFamily:"'DM Mono'"}} tickLine={false} interval={Math.max(0,Math.floor(strategyAnalysis.chartData.length/8))}
                   tickFormatter={d=>{const[y,m]=d.split("-");return`${y.slice(2)}.${m}`;}}/>
-                <YAxis tick={{fill:"#9E958C",fontSize:11,fontFamily:"'DM Mono'"}} tickLine={false} axisLine={false} tickFormatter={v=>`${v}%`}/>
-                <ReferenceLine y={0} stroke="rgba(26,26,26,0.15)"/>
-                <Tooltip contentStyle={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,fontFamily:"'DM Mono'",fontSize:11}} formatter={(v)=>[`${v.toFixed(1)}%`,"모멘텀"]}/>
-                <Bar dataKey="score" radius={[2,2,0,0]}>
-                  {strategyResults.momScores.filter((_,i)=>i%(Math.max(1,Math.floor(strategyResults.momScores.length/80)))===0).map((d,i)=>(
-                    <Cell key={i} fill={d.score>0?"#5C7A5E":"#8B4049"} opacity={0.7}/>
-                  ))}
-                </Bar>
-              </BarChart>
+                <YAxis yAxisId="val" tick={{fill:"#A0785A",fontSize:11,fontFamily:"'DM Mono'"}} tickLine={false} axisLine={false}
+                  tickFormatter={v=>v>=1e6?`${(v/1e6).toFixed(0)}M`:v>=1e4?`${(v/1e4).toFixed(0)}만`:fmtNum(v)}/>
+                <YAxis yAxisId="price" orientation="right" tick={{fill:"#9E958C",fontSize:10,fontFamily:"'DM Mono'"}} tickLine={false} axisLine={false}
+                  tickFormatter={v=>v>=10000?`${(v/10000).toFixed(0)}만`:fmtNum(v)}/>
+                <Tooltip contentStyle={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:8,fontFamily:"'DM Mono'",fontSize:11}}
+                  formatter={(v,name)=>name==="value"?[fmtKRW(v),"자산"]:name==="price"?[fmtKRW(v),"주가"]:[`${v}/${strategyAnalysis.latest?.maxScore}`,"점수"]}/>
+                <Line yAxisId="val" type="monotone" dataKey="value" stroke="#A0785A" strokeWidth={2} dot={false} name="value"/>
+                <Line yAxisId="price" type="monotone" dataKey="price" stroke="#D6CEC4" strokeWidth={1} dot={false} name="price"/>
+                <ReferenceLine yAxisId="val" y={st.initAmt} stroke="rgba(26,26,26,0.15)" strokeDasharray="4 4"/>
+              </LineChart>
             </ResponsiveContainer>
           </div>
 
-          {/* 변동성 돌파 */}
+          {/* 매매 내역 */}
           <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div><div style={{fontSize:15,fontWeight:700}}>변동성 돌파 시그널</div>
-                <div style={{fontSize:11,color:"#9E958C",marginTop:2}}>전일 레인지 × K({st.breakoutK}) 돌파 · 최근 30개 시그널</div></div>
-              <div style={{background:"rgba(139,64,73,0.08)",padding:"6px 12px",borderRadius:6,fontSize:12,fontFamily:"'DM Mono'"}}>
-                최근 1년 돌파 <span style={{fontWeight:600,color:"#8B4049"}}>{strategyResults.breakoutSignals.filter(s=>s.date>=new Date(Date.now()-365*86400000).toISOString().split("T")[0]).length}회</span>
-              </div>
-            </div>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:14}}>매매 내역 (최근 40건)</div>
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead><tr>{["날짜","목표가","당일종가","전일레인지","결과"].map(h=><th key={h} style={{textAlign:"left",padding:"8px 12px",fontSize:10,color:"#9E958C",borderBottom:"2px solid #E8E2DA",fontWeight:500}}>{h}</th>)}</tr></thead>
-                <tbody>{strategyResults.breakoutSignals.slice(-30).reverse().map((sig,i)=>{
-                  const hit=sig.price>=sig.target;
-                  return(<tr key={i} style={{borderBottom:"1px solid #F0EDE8"}}>
-                    <td style={{padding:"8px 12px",fontFamily:"'DM Mono'",color:"#4A4440"}}>{sig.date}</td>
-                    <td style={{padding:"8px 12px",fontFamily:"'DM Mono'",color:"#A0785A"}}>{fmtKRW(sig.target)}</td>
-                    <td style={{padding:"8px 12px",fontFamily:"'DM Mono'"}}>{fmtKRW(sig.price)}</td>
-                    <td style={{padding:"8px 12px",fontFamily:"'DM Mono'",color:"#7A7067"}}>{fmtKRW(Math.round(sig.range))}</td>
-                    <td style={{padding:"8px 12px",color:hit?"#5C7A5E":"#8B4049",fontWeight:600}}>{hit?"돌파 ✓":"미달"}</td>
-                  </tr>);
-                })}</tbody>
+                <thead><tr>{["구분","날짜","가격","점수/수익률"].map(h=><th key={h} style={{textAlign:"left",padding:"8px 12px",fontSize:10,color:"#9E958C",borderBottom:"2px solid #E8E2DA",fontWeight:500}}>{h}</th>)}</tr></thead>
+                <tbody>{strategyAnalysis.trades.slice(-40).reverse().map((t,i)=>(
+                  <tr key={i} style={{borderBottom:"1px solid #F0EDE8"}}>
+                    <td style={{padding:"8px 12px"}}><span style={{fontSize:11,fontWeight:600,color:t.type==="buy"?"#5C7A5E":"#8B4049",background:t.type==="buy"?"rgba(92,122,94,0.08)":"rgba(139,64,73,0.08)",padding:"2px 8px",borderRadius:3}}>{t.type==="buy"?"매수":"매도"}</span></td>
+                    <td style={{padding:"8px 12px",fontFamily:"'DM Mono'",color:"#4A4440"}}>{t.date}</td>
+                    <td style={{padding:"8px 12px",fontFamily:"'DM Mono'"}}>{fmtKRW(t.price)}</td>
+                    <td style={{padding:"8px 12px",fontFamily:"'DM Mono'",color:t.type==="buy"?"#7A7067":parseFloat(t.ret)>0?"#5C7A5E":"#8B4049",fontWeight:t.type==="sell"?600:400}}>{t.type==="buy"?`${t.score}점`:`${t.ret}%`}</td>
+                  </tr>
+                ))}</tbody>
               </table>
             </div>
           </div>
@@ -458,14 +545,14 @@ function TrendFollowing({trendState,setTrendState}){
       )}
 
       {!st.loading&&!st.selected&&(
-        <div style={{textAlign:"center",padding:"80px 20px",color:"#9E958C"}}>
+        <div style={{textAlign:"center",padding:"60px 20px",color:"#9E958C"}}>
           <div style={{fontSize:40,marginBottom:16}}>📊</div>
-          <div style={{fontSize:16,fontWeight:600,color:"#7A7067",marginBottom:10}}>추세추종 전략 분석</div>
-          <div style={{fontSize:12,lineHeight:2,maxWidth:400,margin:"0 auto"}}>
-            종목을 선택하면 세 가지 전략을 동시에 분석합니다.<br/>
-            <strong style={{color:"#A0785A"}}>이동평균 크로스</strong> · 골든/데드크로스 시그널과 백테스트<br/>
-            <strong style={{color:"#5C7A5E"}}>듀얼 모멘텀</strong> · 절대 모멘텀 스코어 차트<br/>
-            <strong style={{color:"#8B4049"}}>변동성 돌파</strong> · 래리 윌리엄스 전략 시그널
+          <div style={{fontSize:16,fontWeight:600,color:"#7A7067",marginBottom:10}}>멀티 전략 추세추종 & 백테스트</div>
+          <div style={{fontSize:12,lineHeight:2,maxWidth:440,margin:"0 auto"}}>
+            종목을 선택하고 전략을 조합하면 자동으로 백테스트합니다.<br/>
+            7가지 전략을 자유롭게 ON/OFF 하고 조건을 설정하세요.<br/>
+            <strong style={{color:"#A0785A"}}>MA크로스 · MA정배열 · 미너비니 · RS상대강도</strong><br/>
+            <strong style={{color:"#5C7A5E"}}>볼린저밴드 · 변동성돌파 · 듀얼모멘텀</strong>
           </div>
         </div>
       )}
@@ -954,6 +1041,8 @@ function App(){
   const[trendState,setTrendState]=useState({
     selected:null,history:[],loading:false,error:null,
     maShort:5,maLong:60,momPeriod:60,breakoutK:0.5,
+    activeStrats:["maCross","maAlign","minervini","rs","momentum"],
+    conditionMode:"score",minScore:3,initAmt:10000000,
   });
   const[corrState,setCorrState]=useState({
     data:null,loaded:false,loading:false,
