@@ -374,9 +374,162 @@ function TrendFollowing({trendState,setTrendState}){
   const fmtKRW=(v)=>{if(v==null)return"—";return Number(v).toLocaleString("ko-KR")+"원";};
   const retColor=(v)=>v>0?"#5C7A5E":v<0?"#8B4049":"#7A7067";
 
+  // ── 타임프레임에 맞는 range 자동 결정 ──
+  const intervalToRange=(iv)=>{
+    if(iv==="1m"||iv==="2m")return"7d";
+    if(iv==="5m"||iv==="15m"||iv==="30m")return"60d";
+    if(iv==="60m"||iv==="90m"||iv==="1h")return"730d";
+    if(iv==="1wk")return"5y";
+    if(iv==="1mo")return"max";
+    return"5y";
+  };
+
+  // ── 종목 선택 시 재로딩 (타임프레임 변경 반영) ──
+  useEffect(()=>{
+    if(!st.selected)return;
+    const reload=async()=>{
+      set("loading",true);
+      try{
+        const range=intervalToRange(st.timeframe);
+        const[hRes,kRes]=await Promise.all([
+          fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent(st.selected.symbol)}&range=${range}&interval=${st.timeframe}`).then(r=>r.json()),
+          fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent("^KS11")}&range=${range}&interval=${st.timeframe}`).then(r=>r.json())
+        ]);
+        set("history",hRes.history||[]);
+        setKospiHist(kRes.history||[]);
+      }catch(e){set("error","데이터 로딩 실패");}
+      set("loading",false);
+    };
+    reload();
+  },[st.timeframe]);
+
+  // ── 스크리너: 전체 종목 일괄 분석 ──
+  const runScreener=async()=>{
+    set("screenerLoading",true);set("screenerResults",null);
+    try{
+      const range=intervalToRange(st.timeframe);
+      const res=await fetch(`${WORKER_URL}/api/screener?range=${range}&interval=${st.timeframe}`);
+      const data=await res.json();
+      // KOSPI 데이터도 가져오기 (RS 계산용)
+      const kRes=await fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent("^KS11")}&range=${range}&interval=${st.timeframe}`).then(r=>r.json());
+      setKospiHist(kRes.history||[]);
+      // 각 종목에 대해 시그널 계산
+      const results=(data.stocks||[]).map(s=>{
+        if(!s.history||s.history.length<200)return null;
+        const sig=evaluateSignals(s.history,kRes.history||[]);
+        return{...s,signals:sig.signals,scores:sig.scores,totalScore:sig.totalScore,maxScore:sig.maxScore,buySignal:sig.buySignal,currentPrice:s.history[s.history.length-1]?.adjClose||s.history[s.history.length-1]?.close,details:sig.details};
+      }).filter(Boolean);
+      set("screenerResults",results);
+    }catch(e){set("error","스크리너 실행 실패");}
+    set("screenerLoading",false);
+  };
+
+  // 시그널 평가 함수 (단일 종목 최신 시점)
+  const evaluateSignals=(hist,kHist)=>{
+    if(hist.length<200)return{signals:{},scores:{},totalScore:0,maxScore:0,buySignal:false,details:{}};
+    const prices=hist.map(d=>d.adjClose||d.close);
+    const ma5=calcMA(hist,5),ma20=calcMA(hist,20),ma60=calcMA(hist,60),ma120=calcMA(hist,120),ma200=calcMA(hist,200),ma150=calcMA(hist,150);
+    const bb=calcBB(hist,20,2);
+    const i=hist.length-1;
+    const p=prices[i];
+    const scores={};const details={};
+
+    // MA 크로스
+    const sMA=st.maShort===5?ma5:ma20;
+    const lMA=st.maLong===60?ma60:st.maLong===120?ma120:ma200;
+    if(sMA[i]!=null&&lMA[i]!=null)scores.maCross=sMA[i]>lMA[i]?1:-1;
+
+    // MA 정배열
+    if(ma5[i]&&ma20[i]&&ma60[i]&&ma120[i]&&ma200[i]){
+      const aligned=ma5[i]>ma20[i]&&ma20[i]>ma60[i]&&ma60[i]>ma120[i]&&ma120[i]>ma200[i];
+      scores.maAlign=aligned?1:0;
+    }
+
+    // 미너비니
+    if(ma150[i]&&ma200[i]&&i>=252){
+      const w52=prices.slice(Math.max(0,i-252),i+1);
+      const w52High=Math.max(...w52),w52Low=Math.min(...w52);
+      const ma200rising=ma200[i]>(ma200[Math.max(0,i-20)]||0);
+      const aboveMAs=p>ma150[i]&&ma150[i]>ma200[i];
+      const fromLow=(p/w52Low-1)>=0.3;
+      const fromHigh=(1-p/w52High)<=0.25;
+      scores.minervini=ma200rising&&aboveMAs&&fromLow&&fromHigh?1:0;
+      details.fromHigh=((1-p/w52High)*100).toFixed(1);
+      details.fromLow=((p/w52Low-1)*100).toFixed(1);
+    }
+
+    // RS
+    if(kHist&&kHist.length>60&&i>=60){
+      const kMap={};kHist.forEach(k=>{kMap[k.date]=k.adjClose||k.close;});
+      const today=kMap[hist[i].date],past60=kMap[hist[Math.max(0,i-60)]?.date];
+      if(today&&past60){
+        const stockRet=(p/prices[Math.max(0,i-60)]-1)*100;
+        const kospiRet=(today/past60-1)*100;
+        const rs=stockRet-kospiRet;
+        scores.rs=rs>0?1:rs<-5?-1:0;
+        details.rs=rs.toFixed(1);
+      }
+    }
+
+    // 볼린저
+    if(bb[i].upper!=null)scores.bollinger=p>bb[i].upper?1:p<bb[i].lower?-1:0;
+
+    // 변동성 돌파
+    if(i>0){
+      const prev=hist[i-1];
+      const prevRange=prev.high-prev.low;
+      const target=(prev.adjClose||prev.close)+prevRange*st.breakoutK;
+      scores.breakout=hist[i].high>=target?1:0;
+    }
+
+    // 모멘텀
+    if(i>=st.momPeriod){
+      const ret=(p/prices[i-st.momPeriod]-1)*100;
+      scores.momentum=ret>0?1:-1;
+      details.momentum=ret.toFixed(1);
+    }
+
+    const active=st.activeStrats;
+    const activeScores=active.map(k=>scores[k]).filter(v=>v!=null);
+    const totalScore=activeScores.reduce((a,b)=>a+Math.max(0,b),0);
+    const maxScore=activeScores.length;
+    const buySignal=st.conditionMode==="and"?activeScores.every(v=>v>=1):totalScore>=st.minScore;
+    return{signals:scores,scores,totalScore,maxScore,buySignal,details};
+  };
+
+  const TIMEFRAMES=[
+    {key:"1m",label:"1분"},{key:"5m",label:"5분"},{key:"15m",label:"15분"},
+    {key:"30m",label:"30분"},{key:"60m",label:"60분"},{key:"1d",label:"일봉"},
+    {key:"1wk",label:"주봉"},{key:"1mo",label:"월봉"},
+  ];
+
   return(
     <div style={{padding:"28px 48px",minHeight:"60vh"}}>
-      {/* 종목 검색 */}
+      {/* 모드 + 타임프레임 */}
+      <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:20,padding:"14px 20px",background:"#fff",border:"1px solid #E8E2DA",borderRadius:12}}>
+        <div style={{display:"flex",gap:4,background:"#FAF8F5",padding:3,borderRadius:8}}>
+          {[{key:"single",label:"개별 분석"},{key:"screener",label:"전체 스크리닝"}].map(m=>(
+            <button key={m.key} onClick={()=>set("mode",m.key)}
+              style={{padding:"7px 16px",border:"none",borderRadius:6,fontSize:12,fontWeight:st.mode===m.key?700:500,
+                background:st.mode===m.key?"#fff":"transparent",color:st.mode===m.key?"#A0785A":"#7A7067",
+                boxShadow:st.mode===m.key?"0 1px 3px rgba(0,0,0,0.05)":"none",cursor:"pointer",transition:"all 0.15s"}}>{m.label}</button>
+          ))}
+        </div>
+        <div style={{height:24,width:1,background:"#E8E2DA"}}/>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:11,color:"#9E958C"}}>타임프레임</span>
+          <div style={{display:"flex",gap:3}}>
+            {TIMEFRAMES.map(tf=>(
+              <button key={tf.key} className={`gb ${st.timeframe===tf.key?"on":""}`} onClick={()=>set("timeframe",tf.key)}>{tf.label}</button>
+            ))}
+          </div>
+        </div>
+        {(st.timeframe==="1m"||st.timeframe==="5m"||st.timeframe==="15m"||st.timeframe==="30m"||st.timeframe==="60m")&&
+          <div style={{fontSize:10,color:"#A0785A",background:"rgba(160,120,90,0.06)",padding:"4px 10px",borderRadius:4}}>⚠ 분봉은 한국 종목 데이터가 불안정할 수 있습니다</div>}
+      </div>
+
+      {/* 개별 분석 모드: 종목 검색 */}
+      {st.mode==="single"&&(
       <div style={{display:"flex",gap:16,alignItems:"flex-start",flexWrap:"wrap",marginBottom:20}}>
         <div style={{position:"relative",width:360}}>
           <input type="text" value={searchQ} onChange={e=>onSearchInput(e.target.value)}
@@ -399,6 +552,18 @@ function TrendFollowing({trendState,setTrendState}){
         </div>
         {st.selected&&<div style={{padding:"8px 16px",background:"rgba(160,120,90,0.08)",borderRadius:8,fontSize:14,fontWeight:600,color:"#A0785A"}}>{st.selected.name}</div>}
       </div>
+      )}
+
+      {/* 스크리너 모드: 실행 버튼 */}
+      {st.mode==="screener"&&(
+      <div style={{marginBottom:20}}>
+        <button onClick={runScreener} disabled={st.screenerLoading}
+          style={{padding:"12px 24px",background:st.screenerLoading?"#D6CEC4":"#A0785A",color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:st.screenerLoading?"wait":"pointer",fontFamily:"'Noto Sans KR'"}}>
+          {st.screenerLoading?"🔍 분석 중... (60개 종목)":"📊 전체 종목 스크리닝 실행"}
+        </button>
+        <span style={{marginLeft:12,fontSize:11,color:"#9E958C"}}>※ 60개 한국 주요 종목을 분석합니다 (30초~1분 소요)</span>
+      </div>
+      )}
 
       {/* 전략 빌더 */}
       <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
@@ -452,7 +617,7 @@ function TrendFollowing({trendState,setTrendState}){
       {st.error&&<div style={{background:"rgba(139,64,73,0.06)",border:"1px solid rgba(139,64,73,0.2)",borderRadius:8,padding:"12px 16px",marginBottom:20,fontSize:12,color:"#8B4049"}}>{st.error}</div>}
       {st.loading&&<div style={{textAlign:"center",padding:60,color:"#A0785A",fontSize:13}}>데이터 로딩 중...</div>}
 
-      {!st.loading&&strategyAnalysis&&(
+      {!st.loading&&st.mode==="single"&&strategyAnalysis&&(
         <div style={{animation:"fadeIn 0.3s ease"}}>
           {/* 현재 전략 대시보드 */}
           <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
@@ -544,7 +709,7 @@ function TrendFollowing({trendState,setTrendState}){
         </div>
       )}
 
-      {!st.loading&&!st.selected&&(
+      {!st.loading&&st.mode==="single"&&!st.selected&&(
         <div style={{textAlign:"center",padding:"60px 20px",color:"#9E958C"}}>
           <div style={{fontSize:40,marginBottom:16}}>📊</div>
           <div style={{fontSize:16,fontWeight:600,color:"#7A7067",marginBottom:10}}>멀티 전략 추세추종 & 백테스트</div>
@@ -553,6 +718,108 @@ function TrendFollowing({trendState,setTrendState}){
             7가지 전략을 자유롭게 ON/OFF 하고 조건을 설정하세요.<br/>
             <strong style={{color:"#A0785A"}}>MA크로스 · MA정배열 · 미너비니 · RS상대강도</strong><br/>
             <strong style={{color:"#5C7A5E"}}>볼린저밴드 · 변동성돌파 · 듀얼모멘텀</strong>
+          </div>
+        </div>
+      )}
+
+      {/* ── 스크리너 결과 ── */}
+      {st.mode==="screener"&&st.screenerLoading&&(
+        <div style={{textAlign:"center",padding:60,color:"#A0785A",fontSize:13}}>
+          <div style={{marginBottom:8}}>전체 종목 분석 중...</div>
+          <div style={{fontSize:11,color:"#9E958C"}}>60개 종목 × {STRATEGIES.filter(s=>st.activeStrats.includes(s.key)).length}개 전략</div>
+        </div>
+      )}
+      {st.mode==="screener"&&!st.screenerLoading&&st.screenerResults&&(
+        <div style={{animation:"fadeIn 0.3s ease"}}>
+          {/* 요약 카드 */}
+          {(()=>{
+            const buyList=st.screenerResults.filter(r=>r.buySignal).sort((a,b)=>b.totalScore-a.totalScore);
+            const watchList=st.screenerResults.filter(r=>!r.buySignal&&r.totalScore>=Math.max(1,st.minScore-1)).sort((a,b)=>b.totalScore-a.totalScore);
+            return(
+              <>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10,marginBottom:20}}>
+                  <div style={{background:"rgba(92,122,94,0.08)",border:"1px solid rgba(92,122,94,0.2)",borderRadius:8,padding:"14px 18px"}}>
+                    <div style={{fontSize:10,color:"#7A7067",marginBottom:4}}>매수 시그널 종목</div>
+                    <div style={{fontSize:22,fontWeight:700,color:"#5C7A5E",fontFamily:"'DM Mono'"}}>{buyList.length}<span style={{fontSize:12,color:"#9E958C",marginLeft:4}}>/ {st.screenerResults.length}</span></div>
+                  </div>
+                  <div style={{background:"rgba(160,120,90,0.08)",border:"1px solid rgba(160,120,90,0.2)",borderRadius:8,padding:"14px 18px"}}>
+                    <div style={{fontSize:10,color:"#7A7067",marginBottom:4}}>관심 종목</div>
+                    <div style={{fontSize:22,fontWeight:700,color:"#A0785A",fontFamily:"'DM Mono'"}}>{watchList.length}</div>
+                  </div>
+                  <div style={{background:"#FAF8F5",border:"1px solid #E8E2DA",borderRadius:8,padding:"14px 18px"}}>
+                    <div style={{fontSize:10,color:"#7A7067",marginBottom:4}}>활성 전략</div>
+                    <div style={{fontSize:14,fontWeight:600,color:"#2D2926"}}>{st.activeStrats.length}개</div>
+                  </div>
+                  <div style={{background:"#FAF8F5",border:"1px solid #E8E2DA",borderRadius:8,padding:"14px 18px"}}>
+                    <div style={{fontSize:10,color:"#7A7067",marginBottom:4}}>매수 조건</div>
+                    <div style={{fontSize:14,fontWeight:600,color:"#2D2926"}}>{st.conditionMode==="and"?"전체 충족":`${st.minScore}개+ 충족`}</div>
+                  </div>
+                </div>
+
+                {/* 매수 시그널 테이블 */}
+                <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
+                  <div style={{fontSize:15,fontWeight:700,marginBottom:14}}>🟢 매수 시그널 종목 ({buyList.length})</div>
+                  {buyList.length===0?(
+                    <div style={{textAlign:"center",padding:30,color:"#9E958C",fontSize:13}}>현재 매수 조건을 충족하는 종목이 없습니다.<br/><span style={{fontSize:11}}>조건을 완화하거나 다른 전략을 활성화해보세요.</span></div>
+                  ):(
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                        <thead><tr>{["순위","종목","시장","섹터","현재가","점수",...STRATEGIES.filter(s=>st.activeStrats.includes(s.key)).map(s=>s.name)].map((h,i)=>
+                          <th key={i} style={{textAlign:"left",padding:"8px 10px",fontSize:10,color:"#9E958C",borderBottom:"2px solid #E8E2DA",fontWeight:500,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                        <tbody>{buyList.map((r,i)=>(
+                          <tr key={r.symbol} style={{borderBottom:"1px solid #F0EDE8"}}>
+                            <td style={{padding:"8px 10px",fontFamily:"'DM Mono'",color:"#A0785A",fontWeight:600}}>#{i+1}</td>
+                            <td style={{padding:"8px 10px"}}><span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#A0785A",fontWeight:600,marginRight:6}}>{r.code}</span><span style={{fontSize:12,fontWeight:600}}>{r.name}</span></td>
+                            <td style={{padding:"8px 10px"}}><span style={{fontSize:9,color:r.market==="KOSDAQ"?"#A0785A":"#5C7A5E",background:r.market==="KOSDAQ"?"rgba(160,120,90,0.08)":"rgba(92,122,94,0.08)",padding:"2px 6px",borderRadius:3,fontWeight:600}}>{r.market}</span></td>
+                            <td style={{padding:"8px 10px",fontSize:11,color:"#7A7067"}}>{r.sector}</td>
+                            <td style={{padding:"8px 10px",fontFamily:"'DM Mono'"}}>{fmtKRW(r.currentPrice)}</td>
+                            <td style={{padding:"8px 10px"}}><span style={{background:"rgba(92,122,94,0.1)",color:"#5C7A5E",padding:"3px 8px",borderRadius:4,fontFamily:"'DM Mono'",fontWeight:700,fontSize:11}}>{r.totalScore}/{r.maxScore}</span></td>
+                            {STRATEGIES.filter(s=>st.activeStrats.includes(s.key)).map(s=>(
+                              <td key={s.key} style={{padding:"8px 10px",textAlign:"center",fontSize:14}}>{r.scores[s.key]>=1?"✅":r.scores[s.key]<=-1?"❌":"⏸️"}</td>
+                            ))}
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* 관심 종목 테이블 */}
+                {watchList.length>0&&(
+                  <div style={{background:"#fff",border:"1px solid #E8E2DA",borderRadius:12,padding:"20px 24px"}}>
+                    <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>👀 관심 종목 ({watchList.length})</div>
+                    <div style={{fontSize:11,color:"#9E958C",marginBottom:14}}>매수 조건에는 미달하지만 일부 시그널이 충족된 종목</div>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                        <thead><tr>{["종목","시장","현재가","점수",...STRATEGIES.filter(s=>st.activeStrats.includes(s.key)).map(s=>s.name)].map((h,i)=>
+                          <th key={i} style={{textAlign:"left",padding:"8px 10px",fontSize:10,color:"#9E958C",borderBottom:"2px solid #E8E2DA",fontWeight:500,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                        <tbody>{watchList.slice(0,20).map(r=>(
+                          <tr key={r.symbol} style={{borderBottom:"1px solid #F0EDE8"}}>
+                            <td style={{padding:"8px 10px"}}><span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#A0785A",fontWeight:600,marginRight:6}}>{r.code}</span><span style={{fontSize:12,fontWeight:500}}>{r.name}</span></td>
+                            <td style={{padding:"8px 10px"}}><span style={{fontSize:9,color:r.market==="KOSDAQ"?"#A0785A":"#5C7A5E",fontWeight:600}}>{r.market}</span></td>
+                            <td style={{padding:"8px 10px",fontFamily:"'DM Mono'"}}>{fmtKRW(r.currentPrice)}</td>
+                            <td style={{padding:"8px 10px"}}><span style={{background:"rgba(160,120,90,0.1)",color:"#A0785A",padding:"3px 8px",borderRadius:4,fontFamily:"'DM Mono'",fontWeight:600,fontSize:11}}>{r.totalScore}/{r.maxScore}</span></td>
+                            {STRATEGIES.filter(s=>st.activeStrats.includes(s.key)).map(s=>(
+                              <td key={s.key} style={{padding:"8px 10px",textAlign:"center",fontSize:13}}>{r.scores[s.key]>=1?"✅":r.scores[s.key]<=-1?"❌":"⏸️"}</td>
+                            ))}
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      )}
+      {st.mode==="screener"&&!st.screenerLoading&&!st.screenerResults&&(
+        <div style={{textAlign:"center",padding:"60px 20px",color:"#9E958C"}}>
+          <div style={{fontSize:40,marginBottom:16}}>🔍</div>
+          <div style={{fontSize:16,fontWeight:600,color:"#7A7067",marginBottom:10}}>전체 종목 자동 스크리닝</div>
+          <div style={{fontSize:12,lineHeight:2,maxWidth:440,margin:"0 auto"}}>
+            위에서 전략과 조건을 설정한 후 <strong style={{color:"#A0785A"}}>"스크리닝 실행"</strong> 버튼을 누르면<br/>
+            60개 한국 주요 종목을 모두 분석해서 매수 시그널 종목만 보여줍니다.
           </div>
         </div>
       )}
@@ -1039,10 +1306,12 @@ function App(){
     chartMode:"price",
   });
   const[trendState,setTrendState]=useState({
+    mode:"single",timeframe:"1d",
     selected:null,history:[],loading:false,error:null,
     maShort:5,maLong:60,momPeriod:60,breakoutK:0.5,
     activeStrats:["maCross","maAlign","minervini","rs","momentum"],
     conditionMode:"score",minScore:3,initAmt:10000000,
+    screenerLoading:false,screenerResults:null,
   });
   const[corrState,setCorrState]=useState({
     data:null,loaded:false,loading:false,
