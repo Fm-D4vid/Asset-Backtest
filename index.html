@@ -153,7 +153,7 @@ function getFx(aCcy,bCcy,mode,yi){
   if(mode==="hedged"){const br=bCcy==="USD"?(DATA.us_cash[yi]||0):bCcy==="KRW"?(DATA.kr_cash[yi]||0):(DATA.jp_cash[yi]||0);const ar=aCcy==="USD"?(DATA.us_cash[yi]||0):aCcy==="KRW"?(DATA.kr_cash[yi]||0):(DATA.jp_cash[yi]||0);return-(br-ar)*0.8;}
   return fx;
 }
-function splitRet(a,n,s){const b=Math.pow(1+a/100,1/n)-1;const r=[];let rem=a/100;for(let i=0;i<n-1;i++){const noise=1+((Math.abs(s)*7+i*13)%5-2)*0.12;const p=b*noise;r.push(p);rem=(1+rem)/(1+p)-1;}r.push(rem);return r;}
+function splitRet(a,n,s,noiseScale=0.05){const b=Math.pow(1+a/100,1/n)-1;const r=[];let rem=a/100;for(let i=0;i<n-1;i++){const hash=Math.abs(Math.sin(s*127.1+i*311.7))*43758.5453;const noise=1+((hash%1)*2-1)*noiseScale;const p=b*noise;r.push(p);rem=(1+rem)/(1+p)-1;}r.push(rem);return r;}
 
 function runBacktest(alloc,sYM,eYM,rebal,gran,fxMode,bCcy,init){
   if(!alloc||!Object.keys(alloc).length||!YRS.length)return null;
@@ -201,7 +201,7 @@ const STRATEGIES=[
   {key:"maCross",name:"MA 크로스",desc:"단기MA가 장기MA를 상향돌파 시 매수, 하향돌파 시 매도",color:"#A0785A"},
   {key:"maAlign",name:"MA 정배열",desc:"5>20>60>120>200일선 순서로 정배열 시 매수",color:"#7A6040"},
   {key:"minervini",name:"미너비니 Trend Template",desc:"200일선 우상향, 주가>150MA>200MA, 52주저점+30%↑, 52주고점-25%↓",color:"#5C7A5E"},
-  {key:"rs",name:"RS 상대강도",desc:"KOSPI 대비 상대강도가 양수이면 매수",color:"#6B8CA0"},
+  {key:"rs",name:"RS 상대강도",desc:"미너비니 RS 점수 (쿼터별 가중 수익률 백분위 70+)",color:"#6B8CA0"},
   {key:"bollinger",name:"볼린저 밴드 돌파",desc:"주가가 상단밴드(2σ)를 돌파하면 매수",color:"#9E7080"},
   {key:"breakout",name:"변동성 돌파",desc:"전일 레인지×K 돌파 시 매수 (래리 윌리엄스)",color:"#8B4049"},
   {key:"momentum",name:"듀얼 모멘텀",desc:"N일 수익률이 양수이면 매수, 음수이면 현금",color:"#7A6B5D"},
@@ -245,6 +245,8 @@ function TrendFollowing({trendState,setTrendState}){
       return{upper:ma[i]+mult*std,lower:ma[i]-mult*std,mid:ma[i]};
     });
   };
+  const calcRSRaw=(prices,i)=>{if(i<252)return null;const p=prices[i];return(p/(prices[i-63]||p))*0.4+(p/(prices[i-126]||p))*0.2+(p/(prices[i-189]||p))*0.2+(p/(prices[i-252]||p))*0.2;};
+  const calcRSPercentile=(raw,all)=>{if(raw==null||!all.length)return null;const v=all.filter(s=>s!=null).sort((a,b)=>a-b);if(!v.length)return null;const idx=v.findIndex(s=>s>=raw);return Math.round(((idx<0?v.length:idx)/v.length)*99)+1;};
 
   // ── 전략 시그널 계산 ──
   const strategyAnalysis=useMemo(()=>{
@@ -407,7 +409,7 @@ function TrendFollowing({trendState,setTrendState}){
   // runScreener removed — replaced by runScreenerWith above
 
   // 시그널 평가 함수 (단일 종목 최신 시점)
-  const evaluateSignals=(hist,kHist,strats)=>{
+  const evaluateSignals=(hist,kHist,strats,allRSScores)=>{
     const activeS=strats||st.activeStrats;
     if(hist.length<200)return{signals:{},scores:{},totalScore:0,maxScore:0,buySignal:false,details:{}};
     const prices=hist.map(d=>d.adjClose||d.close);
@@ -441,8 +443,12 @@ function TrendFollowing({trendState,setTrendState}){
       details.fromLow=((p/w52Low-1)*100).toFixed(1);
     }
 
-    // RS
-    if(kHist&&kHist.length>60&&i>=60){
+    // RS (미너비니 쿼터별 가중 백분위)
+    const rsRaw=calcRSRaw(prices,i);
+    if(rsRaw!=null&&allRSScores&&allRSScores.length>0){
+      const rsRank=calcRSPercentile(rsRaw,allRSScores);
+      if(rsRank!=null){scores.rs=rsRank>=70?1:rsRank<=30?-1:0;details.rsRank=rsRank;details.rsRaw=rsRaw.toFixed(3);}
+    } else if(kHist&&kHist.length>60&&i>=60){
       const kMap={};kHist.forEach(k=>{kMap[k.date]=k.adjClose||k.close;});
       const today=kMap[hist[i].date],past60=kMap[hist[Math.max(0,i-60)]?.date];
       if(today&&past60){
@@ -506,9 +512,18 @@ function TrendFollowing({trendState,setTrendState}){
       const kRes=await fetch(`${WORKER_URL}/api/history?symbol=${encodeURIComponent(st.region==="us"?"^GSPC":"^KS11")}&range=${range}&interval=${st.timeframe}`).then(r=>r.json());
       setKospiHist(kRes.history||[]);
       const tempStrats=strats||st.activeStrats;
+      // RS 백분위를 위해 전종목 Raw Score 수집
+      const allRSRaw=[];
+      (data.stocks||[]).forEach(s=>{
+        if(s.history&&s.history.length>=252){
+          const prices=s.history.map(d=>d.adjClose||d.close);
+          const raw=calcRSRaw(prices,prices.length-1);
+          if(raw!=null)allRSRaw.push(raw);
+        }
+      });
       const results=(data.stocks||[]).map(s=>{
         if(!s.history||s.history.length<200)return null;
-        const sig=evaluateSignals(s.history,kRes.history||[],tempStrats);
+        const sig=evaluateSignals(s.history,kRes.history||[],tempStrats,allRSRaw);
         return{...s,signals:sig.signals,scores:sig.scores,totalScore:sig.totalScore,maxScore:sig.maxScore,buySignal:sig.buySignal,currentPrice:s.history[s.history.length-1]?.adjClose||s.history[s.history.length-1]?.close,details:sig.details};
       }).filter(Boolean);
       set("screenerResults",results);
@@ -629,6 +644,9 @@ function TrendFollowing({trendState,setTrendState}){
             <span style={{fontSize:11,color:"#9E958C"}}>모멘텀</span>
             <select value={st.momPeriod} onChange={e=>set("momPeriod",+e.target.value)} style={{padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}><option value={20}>20일</option><option value={60}>60일</option><option value={120}>120일</option></select>
           </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{fontSize:11,color:"#9E958C"}}>수수료%</span>
+            <input type="number" value={st.feePercent} onChange={e=>set("feePercent",+e.target.value)} step={0.05} min={0} max={5} style={{width:60,padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}/>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <span style={{fontSize:11,color:"#9E958C"}}>초기자금</span>
             <input type="number" value={st.initAmt} onChange={e=>set("initAmt",+e.target.value)} style={{width:100,padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}/>
@@ -1333,7 +1351,7 @@ function App(){
     selected:null,history:[],loading:false,error:null,
     maShort:5,maLong:60,momPeriod:60,breakoutK:0.5,
     activeStrats:["maCross","maAlign","minervini","rs","momentum"],
-    conditionMode:"score",minScore:3,initAmt:10000000,
+    conditionMode:"score",minScore:3,initAmt:10000000,feePercent:0.25,
     screenerLoading:false,screenerResults:null,
   });
   const[corrState,setCorrState]=useState({
