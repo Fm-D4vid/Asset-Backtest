@@ -1,514 +1,105 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>FinScope — 종합 RS 스크리너</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#fff;--bg2:#f8fafc;--bg3:#f1f5f9;--bg4:#e8eef5;
-  --border:#e2e8f0;--border2:#cbd5e1;
-  --t1:#0f172a;--t2:#475569;--t3:#94a3b8;--t4:#c8d3e0;
-  --blue:#3b82f6;--bl:#eff6ff;--bm:#bfdbfe;--bd:#1d4ed8;
-  --red:#ef4444;--rl:#fef2f2;
-  --grn:#22c55e;--gl:#f0fdf4;
-  --org:#f97316;--ol:#fff7ed;
-  --amb:#f59e0b;--al:#fffbeb;
-  --pur:#8b5cf6;--pl:#f5f3ff;
-  --r4:4px;--r8:8px;--r12:12px;--r20:20px;
-  --sh:0 1px 3px rgba(15,23,42,.06),0 1px 2px rgba(15,23,42,.04);
-  --sh2:0 4px 16px rgba(15,23,42,.09),0 1px 4px rgba(15,23,42,.05);
-  --fn:'Pretendard',sans-serif;--mono:'DM Mono',monospace;
-}
-html,body{background:var(--bg2);color:var(--t1);font-family:var(--fn);font-size:14px;line-height:1.5;min-height:100vh;-webkit-font-smoothing:antialiased}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-thumb{background:var(--border2);border-radius:10px}
-::-webkit-scrollbar-track{background:transparent}
-
-/* ── Topbar ── */
-#topbar{height:52px;background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:0;position:sticky;top:0;z-index:200}
-.logo{display:flex;align-items:center;gap:8px;margin-right:32px;cursor:pointer}
-.logo-icon{width:28px;height:28px;background:var(--blue);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;font-family:var(--mono)}
-.logo-text{font-size:16px;font-weight:800;letter-spacing:-.5px}
-.logo-beta{font-size:9px;font-weight:700;color:var(--blue);background:var(--bl);border:1px solid var(--bm);padding:1px 5px;border-radius:20px}
-.nav{display:flex;gap:2px}
-.nb{padding:5px 13px;border-radius:var(--r8);font-size:13px;font-weight:500;color:var(--t2);cursor:pointer;border:none;background:none;font-family:var(--fn)}
-.nb:hover{background:var(--bg3);color:var(--t1)}
-.nb.on{background:var(--bl);color:var(--bd);font-weight:700}
-.topbar-r{display:flex;align-items:center;gap:8px;margin-left:auto}
-.live-dot{width:6px;height:6px;border-radius:50%;background:var(--grn);animation:pulse 2s infinite}
-.live-b{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:#15803d;background:var(--gl);border:1px solid #bbf7d0;padding:3px 9px;border-radius:20px;font-family:var(--mono)}
-@keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
-
-/* ── Page ── */
-#page{max-width:1440px;margin:0 auto;padding:20px 24px 40px}
-
-/* ── Page header ── */
-.page-hd{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px}
-.eyebrow{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--blue);margin-bottom:4px}
-.page-title{font-size:22px;font-weight:800;letter-spacing:-.5px}
-.page-sub{font-size:12px;color:var(--t3);margin-top:2px;font-family:var(--mono)}
-.hd-r{display:flex;align-items:center;gap:8px}
-.btn{padding:6px 14px;border-radius:var(--r8);font-size:12px;font-weight:600;cursor:pointer;transition:all .13s;border:1px solid var(--border2);background:var(--bg);color:var(--t2);font-family:var(--fn)}
-.btn:hover{background:var(--bg3)}
-.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
-.btn.primary:hover{background:var(--bd)}
-
-/* ── Spectrum ── */
-.spectrum-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--r12);padding:16px 20px;margin-bottom:14px}
-.spec-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.spec-title{font-size:13px;font-weight:700}
-.spec-hint{font-size:11px;color:var(--t3)}
-.spec-wrap{position:relative;padding:18px 0 6px}
-.spec-track{height:7px;border-radius:4px;background:linear-gradient(to right,#3b82f6,#06b6d4 25%,#22c55e 45%,#eab308 65%,#f97316 82%,#ef4444);position:relative}
-.spec-marker{position:absolute;top:50%;transform:translate(-50%,-50%);width:13px;height:13px;border-radius:50%;border:2.5px solid #fff;cursor:pointer;transition:transform .18s;box-shadow:0 2px 5px rgba(0,0,0,.18);z-index:2}
-.spec-marker:hover{transform:translate(-50%,-50%) scale(1.35);z-index:10}
-.spec-tip{position:absolute;bottom:calc(100%+7px);left:50%;transform:translateX(-50%);background:var(--t1);color:#fff;font-size:10px;font-weight:600;padding:3px 8px;border-radius:var(--r4);white-space:nowrap;opacity:0;transition:opacity .13s;pointer-events:none;box-shadow:var(--sh2)}
-.spec-tip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:4px solid transparent;border-top-color:var(--t1)}
-.spec-marker:hover .spec-tip{opacity:1}
-.spec-axis{display:flex;justify-content:space-between;font-size:10px;color:var(--t4);font-family:var(--mono);margin-top:5px}
-
-/* ── Sector cloud ── */
-.sector-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--r12);padding:14px 18px;margin-bottom:14px}
-.sector-label{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--t3);margin-bottom:10px}
-.sector-tags{display:flex;flex-wrap:wrap;gap:5px}
-.stag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:var(--r20);font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--t2);transition:all .13s;user-select:none}
-.stag:hover{border-color:var(--border2);background:var(--bg3)}
-.stag.on{background:var(--bl);border-color:var(--bm);color:var(--bd);font-weight:700}
-.stag-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.stag-rs{font-family:var(--mono);font-size:11px;font-weight:700}
-
-/* ── Filter bar ── */
-.filter-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--r12);padding:12px 16px;margin-bottom:12px}
-.filter-rows{display:flex;flex-direction:column;gap:8px}
-.filter-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.filter-key{font-size:11px;font-weight:600;color:var(--t3);letter-spacing:.5px;min-width:64px;text-transform:uppercase}
-.fg{display:flex;gap:3px;flex-wrap:wrap}
-.fb{padding:4px 11px;border-radius:var(--r4);font-size:12px;font-weight:500;border:1px solid transparent;background:none;color:var(--t3);cursor:pointer;transition:all .13s;font-family:var(--fn)}
-.fb:hover{background:var(--bg3);color:var(--t2)}
-.fb.on{background:var(--blue);color:#fff;font-weight:700}
-.filter-divider{width:1px;height:18px;background:var(--border);flex-shrink:0}
-.fsel{padding:4px 10px;border-radius:var(--r4);font-size:12px;border:1px solid var(--border);background:var(--bg);color:var(--t2);cursor:pointer;outline:none;font-family:var(--fn)}
-.fsel:focus{border-color:var(--blue)}
-.finput{padding:5px 10px 5px 30px;border-radius:var(--r4);font-size:12px;border:1px solid var(--border);background:var(--bg);color:var(--t1);outline:none;font-family:var(--fn);min-width:160px;transition:border .13s}
-.finput:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.1)}
-.search-wrap{position:relative;display:inline-block}
-.search-icon{position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--t3);pointer-events:none}
-.filter-count{font-size:12px;font-weight:600;color:var(--t3);font-family:var(--mono);margin-left:auto;white-space:nowrap}
-.sort-indicator{font-size:10px;color:var(--blue);margin-left:2px}
-
-/* ── Summary row ── */
-.summary-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
-.sum-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--r8);padding:12px 14px;position:relative;overflow:hidden}
-.sum-bar{position:absolute;top:0;left:0;right:0;height:3px}
-.sum-label{font-size:10px;color:var(--t3);font-weight:500;margin:3px 0 5px;letter-spacing:.3px}
-.sum-val{font-size:19px;font-weight:800;font-family:var(--mono);letter-spacing:-.5px}
-.sum-sub{font-size:10px;color:var(--t3);margin-top:3px}
-
-/* ── Table ── */
-.tbl-wrap{background:var(--bg);border:1px solid var(--border);border-radius:var(--r12);overflow:hidden}
-.tbl-top{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.tbl-title{font-size:13px;font-weight:700}
-.tbl-meta{font-size:11px;color:var(--t3);font-family:var(--mono)}
-table{width:100%;border-collapse:collapse;font-size:12.5px}
-thead tr{background:var(--bg2);border-bottom:1.5px solid var(--border)}
-th{padding:8px 12px;text-align:right;font-size:11px;font-weight:600;color:var(--t3);letter-spacing:.3px;white-space:nowrap;cursor:pointer;user-select:none;transition:color .13s}
-th:hover{color:var(--t1)}
-th.L,td.L{text-align:left}
-th.active{color:var(--bd)}
-td{padding:9px 12px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap;vertical-align:middle}
-tbody tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:var(--bg2)}
-tbody tr.pinned td{background:#fffdf5}
-.star{background:none;border:none;cursor:pointer;font-size:13px;padding:0;color:var(--border2);transition:color .13s}
-.star:hover,.star.on{color:var(--amb)}
-.sec-cell{display:flex;align-items:center;gap:5px}
-.sdot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.nm{font-size:13px;font-weight:700;color:var(--t1)}
-.cd{font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:1px}
-.mkt-badge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px}
-.mkt-kospi{background:#eff6ff;color:#1d4ed8}
-.mkt-kosdaq{background:#f0fdf4;color:#15803d}
-.price{font-family:var(--mono);font-size:13px;font-weight:500}
-.chg{display:inline-flex;align-items:center;padding:2px 6px;border-radius:var(--r4);font-family:var(--mono);font-size:11px;font-weight:700}
-.chg.up{background:var(--rl);color:var(--red)}
-.chg.dn{background:var(--bl);color:var(--bd)}
-.chg.fl{background:var(--bg3);color:var(--t3)}
-.rsc{display:inline-flex;align-items:center;justify-content:center;min-width:34px;padding:3px 7px;border-radius:var(--r4);font-family:var(--mono);font-size:12px;font-weight:800}
-.rsn{font-family:var(--mono);font-size:12px;color:var(--t2)}
-.rsn.hi{color:#dc2626;font-weight:600}
-.rsn.lo{color:#1d4ed8;font-weight:600}
-.cap{font-family:var(--mono);font-size:11.5px;color:var(--t2)}
-.mmt{color:var(--grn);font-weight:800;font-size:14px}
-.vol{font-family:var(--mono);font-size:11px;color:var(--t3)}
-
-/* ── RS bar mini ── */
-.rs-bar-wrap{display:flex;align-items:center;gap:6px}
-.rs-bar-bg{width:60px;height:5px;background:var(--bg4);border-radius:3px;overflow:hidden;flex-shrink:0}
-.rs-bar-fill{height:100%;border-radius:3px;transition:width .3s}
-
-/* ── Pagination ── */
-.pagination{display:flex;align-items:center;justify-content:center;gap:4px;padding:14px;border-top:1px solid var(--border)}
-.pg-btn{padding:5px 10px;border-radius:var(--r4);font-size:12px;font-weight:500;border:1px solid var(--border);background:var(--bg);color:var(--t2);cursor:pointer;font-family:var(--mono);transition:all .13s;min-width:32px;text-align:center}
-.pg-btn:hover{background:var(--bg3)}
-.pg-btn.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:700}
-.pg-btn:disabled{opacity:.35;cursor:not-allowed}
-
-/* ── Empty ── */
-.empty{text-align:center;padding:60px 20px;color:var(--t3)}
-.empty-icon{font-size:32px;margin-bottom:10px;opacity:.4}
-.empty-txt{font-size:13px;font-weight:600;color:var(--t2)}
-
-/* ── Loading skeleton ── */
-.skel{background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite;border-radius:4px;height:14px}
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.skel-row td{padding:12px}
-
-/* ── Fade in ── */
-@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.anim{animation:fadeUp .22s ease forwards}
-
-/* ── Tooltip ── */
-.tooltip-wrap{position:relative;display:inline-block}
-.tooltip-wrap:hover .tooltip-box{opacity:1;pointer-events:auto}
-.tooltip-box{position:absolute;bottom:calc(100%+5px);left:50%;transform:translateX(-50%);background:var(--t1);color:#fff;font-size:10px;padding:4px 9px;border-radius:var(--r4);white-space:nowrap;opacity:0;transition:opacity .13s;pointer-events:none;z-index:100;font-family:var(--fn)}
-.tooltip-box::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:4px solid transparent;border-top-color:var(--t1)}
-
-@media(max-width:900px){
-  .summary-row{grid-template-columns:repeat(2,1fr)}
-  #page{padding:12px}
-  th,td{padding:7px 8px}
-}
-</style>
-</head>
-<body>
-
-<!-- ══ TOPBAR ══ -->
-<header id="topbar">
-  <div class="logo">
-    <div class="logo-icon">FS</div>
-    <span class="logo-text">FinScope</span>
-    <span class="logo-beta">BETA</span>
-  </div>
-  <nav class="nav">
-    <button class="nb">시장개요</button>
-    <button class="nb on">종목분석</button>
-    <button class="nb">ETF</button>
-    <button class="nb">백테스트</button>
-  </nav>
-  <div class="topbar-r">
-    <div class="live-b"><span class="live-dot"></span>전일 종가 기준</div>
-    <button class="btn primary" id="refreshBtn">⟳ 갱신</button>
-  </div>
-</header>
-
-<!-- ══ PAGE ══ -->
-<main id="page">
-
-  <!-- Page Header -->
-  <div class="page-hd anim">
-    <div>
-      <div class="eyebrow">Relative Strength</div>
-      <div class="page-title">종합 RS 스크리너</div>
-      <div class="page-sub">KOSPI · KOSDAQ 전종목 — 전일 종가 기준 · <span id="updateTime">—</span> 업데이트</div>
-    </div>
-    <div class="hd-r">
-      <div style="font-size:11px;color:var(--t3);font-family:var(--mono)" id="lastUpdate">데이터 로딩 중...</div>
-    </div>
-  </div>
-
-  <!-- Spectrum -->
-  <div class="spectrum-card anim">
-    <div class="spec-hd">
-      <span class="spec-title">섹터 RS 스펙트럼</span>
-      <span class="spec-hint">각 점 = 섹터 평균 RS · 호버하면 이름 표시</span>
-    </div>
-    <div class="spec-wrap">
-      <div class="spec-track" id="specTrack"></div>
-      <div class="spec-axis"><span>약함 0</span><span>25</span><span>50</span><span>75</span><span>100 강함</span></div>
-    </div>
-  </div>
-
-  <!-- Sector Tags -->
-  <div class="sector-card anim">
-    <div class="sector-label">섹터별 평균 RS · 클릭하여 필터</div>
-    <div class="sector-tags" id="sectorTags"></div>
-  </div>
-
-  <!-- Filter Bar -->
-  <div class="filter-card anim">
-    <div class="filter-rows">
-      <!-- Row 1: 기간 + 점수 + 시총 -->
-      <div class="filter-row">
-        <span class="filter-key">RS 기간</span>
-        <div class="fg">
-          <button class="fb on" data-g="period" data-val="12m">12개월</button>
-          <button class="fb" data-g="period" data-val="6m">6개월</button>
-          <button class="fb" data-g="period" data-val="3m">3개월</button>
-          <button class="fb" data-g="period" data-val="1m">1개월</button>
-        </div>
-        <div class="filter-divider"></div>
-        <span class="filter-key">RS 점수</span>
-        <div class="fg">
-          <button class="fb on" data-g="rsrange" data-val="all">전체</button>
-          <button class="fb" data-g="rsrange" data-val="90">90+</button>
-          <button class="fb" data-g="rsrange" data-val="80">80+</button>
-          <button class="fb" data-g="rsrange" data-val="70">70+</button>
-          <button class="fb" data-g="rsrange" data-val="50">50+</button>
-          <button class="fb" data-g="rsrange" data-val="u50">50 미만</button>
-        </div>
-        <div class="filter-divider"></div>
-        <span class="filter-key">시가총액</span>
-        <div class="fg">
-          <button class="fb on" data-g="cap" data-val="all">전체</button>
-          <button class="fb" data-g="cap" data-val="10t">10조+</button>
-          <button class="fb" data-g="cap" data-val="1t">1조+</button>
-          <button class="fb" data-g="cap" data-val="3k">3000억+</button>
-          <button class="fb" data-g="cap" data-val="1k">1000억+</button>
-        </div>
-      </div>
-      <!-- Row 2: 거래소 + MMT + 검색 -->
-      <div class="filter-row">
-        <span class="filter-key">거래소</span>
-        <div class="fg">
-          <button class="fb on" data-g="mkt" data-val="all">전체</button>
-          <button class="fb" data-g="mkt" data-val="KOSPI">KOSPI</button>
-          <button class="fb" data-g="mkt" data-val="KOSDAQ">KOSDAQ</button>
-        </div>
-        <div class="filter-divider"></div>
-        <span class="filter-key">조건</span>
-        <div class="fg">
-          <button class="fb" data-g="special" data-val="mmt" id="mmtBtn">MMT 신호만</button>
-          <button class="fb" data-g="special" data-val="starred" id="starBtn">즐겨찾기</button>
-          <button class="fb" data-g="special" data-val="rising" id="risingBtn">RS 상승중</button>
-        </div>
-        <div class="filter-divider"></div>
-        <div class="search-wrap">
-          <span class="search-icon">🔍</span>
-          <input class="finput" id="searchInput" placeholder="종목명 / 종목코드 검색">
-        </div>
-        <span class="filter-count" id="filterCount">— 개 종목</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- Summary Cards -->
-  <div class="summary-row anim" id="summaryRow">
-    <div class="sum-card"><div class="sum-bar" style="background:linear-gradient(90deg,#ef4444,#f97316)"></div><div class="sum-label">RS 90+ 종목</div><div class="sum-val" id="s90">—</div><div class="sum-sub">강세 구간</div></div>
-    <div class="sum-card"><div class="sum-bar" style="background:linear-gradient(90deg,#f97316,#eab308)"></div><div class="sum-label">RS 80+ 종목</div><div class="sum-val" id="s80">—</div><div class="sum-sub">매수 관심</div></div>
-    <div class="sum-card"><div class="sum-bar" style="background:linear-gradient(90deg,#eab308,#22c55e)"></div><div class="sum-label">RS 50~79</div><div class="sum-val" id="s50">—</div><div class="sum-sub">중립 구간</div></div>
-    <div class="sum-card"><div class="sum-bar" style="background:linear-gradient(90deg,#3b82f6,#06b6d4)"></div><div class="sum-label">RS 50 미만</div><div class="sum-val" id="su50">—</div><div class="sum-sub">약세 구간</div></div>
-    <div class="sum-card"><div class="sum-bar" style="background:linear-gradient(90deg,#8b5cf6,#3b82f6)"></div><div class="sum-label">전체 종목</div><div class="sum-val" id="sAll">—</div><div class="sum-sub">KOSPI+KOSDAQ</div></div>
-  </div>
-
-  <!-- Table -->
-  <div class="tbl-wrap anim">
-    <div class="tbl-top">
-      <span class="tbl-title">종목 RS 상세</span>
-      <div style="display:flex;gap:8px;align-items:center">
-        <span class="tbl-meta" id="tblMeta">정렬: RS 내림차순</span>
-        <select class="fsel" id="pageSizeSelect">
-          <option value="50">50개씩</option>
-          <option value="100">100개씩</option>
-          <option value="200">200개씩</option>
-        </select>
-      </div>
-    </div>
-    <div style="overflow-x:auto">
-      <table>
-        <thead>
-          <tr>
-            <th class="L" style="width:28px"></th>
-            <th class="L" style="min-width:180px" data-sort="name">종목명</th>
-            <th class="L" style="min-width:90px" data-sort="sector">섹터</th>
-            <th data-sort="price">현재가</th>
-            <th data-sort="chg">등락률</th>
-            <th class="active" data-sort="rs" id="thRS">RS<span class="sort-indicator">↓</span></th>
-            <th data-sort="rs1m">RS(1M)</th>
-            <th data-sort="rs3m">RS(3M)</th>
-            <th data-sort="rs6m">RS(6M)</th>
-            <th><div class="tooltip-wrap">MMT<div class="tooltip-box">미너비니 모멘텀 템플릿 충족 여부</div></div></th>
-            <th data-sort="cap">시가총액</th>
-            <th data-sort="vol">거래량</th>
-          </tr>
-        </thead>
-        <tbody id="tableBody"></tbody>
-      </table>
-    </div>
-    <div class="pagination" id="pagination"></div>
-  </div>
-
-</main>
-
-<script>
 /* ════════════════════════════════════════
-   데이터 생성 (실제 서비스에서는 pykrx JSON으로 교체)
-   전종목 500개 시뮬레이션 — 실제 종목명/코드/섹터 기반
+   1. API 설정 및 기본 데이터
 ════════════════════════════════════════ */
+// 🚨 여기에 본인의 Cloudflare Worker 주소를 입력하세요!
+const WORKER_API_URL = "https://dawn-union-e2e9.david-choi2631.workers.dev/api/screener?region=kr";
+
 const SECTORS_DEF = [
-  {n:"반도체소재",c:"#ef4444"},{n:"반도체장비",c:"#f97316"},{n:"메모리",c:"#f97316"},
-  {n:"비메모리",c:"#f97316"},{n:"전력기기",c:"#f97316"},{n:"로봇/자동화",c:"#eab308"},
-  {n:"원자력",c:"#eab308"},{n:"방위산업",c:"#eab308"},{n:"테스트소켓",c:"#f97316"},
-  {n:"지주사",c:"#f97316"},{n:"통신",c:"#eab308"},{n:"건설",c:"#eab308"},
-  {n:"증권",c:"#eab308"},{n:"SW/AI",c:"#eab308"},{n:"배터리셀",c:"#22c55e"},
-  {n:"배터리소재",c:"#22c55e"},{n:"바이오신약",c:"#22c55e"},{n:"의료기기",c:"#06b6d4"},
-  {n:"철강/비철",c:"#22c55e"},{n:"화학",c:"#3b82f6"},{n:"은행",c:"#06b6d4"},
-  {n:"보험",c:"#06b6d4"},{n:"해운",c:"#06b6d4"},{n:"자동차",c:"#3b82f6"},
-  {n:"자동차부품",c:"#3b82f6"},{n:"조선",c:"#22c55e"},{n:"항공",c:"#3b82f6"},
-  {n:"유통",c:"#3b82f6"},{n:"음식료",c:"#6366f1"},{n:"제약",c:"#6366f1"},
-  {n:"인터넷/플랫폼",c:"#3b82f6"},{n:"게임",c:"#6366f1"},{n:"엔터/미디어",c:"#8b5cf6"},
-  {n:"화장품",c:"#6366f1"},{n:"리츠",c:"#8b5cf6"},{n:"유틸리티",c:"#6366f1"},
+  {n:"반도체",c:"#ef4444"}, {n:"배터리",c:"#22c55e"}, {n:"바이오",c:"#06b6d4"},
+  {n:"인터넷",c:"#3b82f6"}, {n:"자동차",c:"#3b82f6"}, {n:"금융",c:"#eab308"},
+  {n:"에너지",c:"#f97316"}, {n:"화학",c:"#3b82f6"}, {n:"지주",c:"#f97316"},
+  {n:"전자",c:"#ef4444"}, {n:"소재",c:"#22c55e"}, {n:"건설",c:"#eab308"},
+  {n:"식품",c:"#6366f1"}, {n:"통신",c:"#eab308"}, {n:"화장품",c:"#6366f1"},
+  {n:"IT서비스",c:"#eab308"}, {n:"해운",c:"#06b6d4"}, {n:"항공",c:"#3b82f6"},
+  {n:"게임",c:"#6366f1"}, {n:"엔터",c:"#8b5cf6"}, {n:"보험",c:"#06b6d4"},
+  {n:"조선",c:"#22c55e"}, {n:"철강",c:"#22c55e"}, {n:"유통",c:"#3b82f6"},
+  {n:"증권",c:"#eab308"}, {n:"가전",c:"#3b82f6"}, {n:"방산",c:"#eab308"},
+  {n:"제약",c:"#6366f1"}, {n:"의료기기",c:"#06b6d4"}, {n:"AI",c:"#eab308"},
+  {n:"기계",c:"#eab308"}
 ];
 
-const STOCK_NAMES = [
-  ["삼성전자","005930","메모리","KOSPI",61200,-1.13,365200000],
-  ["SK하이닉스","000660","메모리","KOSPI",198500,-0.75,144500000],
-  ["삼성바이오로직스","207940","바이오신약","KOSPI",1010000,0.50,71400000],
-  ["LG에너지솔루션","373220","배터리셀","KOSPI",352000,-2.10,82500000],
-  ["삼성SDI","006400","배터리소재","KOSPI",245000,-1.83,56800000],
-  ["POSCO홀딩스","005490","철강/비철","KOSPI",287000,1.27,24200000],
-  ["KB금융","105560","은행","KOSPI",89500,-0.33,36800000],
-  ["신한지주","055550","은행","KOSPI",51300,0.78,24300000],
-  ["하나금융지주","086790","은행","KOSPI",68400,1.02,19700000],
-  ["현대차","005380","자동차","KOSPI",215000,-0.46,45800000],
-  ["기아","000270","자동차","KOSPI",108000,0.93,43800000],
-  ["현대모비스","012330","자동차부품","KOSPI",198500,0.25,18700000],
-  ["LG화학","051910","화학","KOSPI",198000,-2.22,14000000],
-  ["롯데케미칼","011170","화학","KOSPI",56300,-1.57,4800000],
-  ["한화솔루션","009830","화학","KOSPI",21650,-0.92,3300000],
-  ["두산에너빌리티","034020","원자력","KOSPI",24150,1.89,9300000],
-  ["HD현대일렉트릭","267260","전력기기","KOSPI",387000,3.41,8900000],
-  ["LS ELECTRIC","010120","전력기기","KOSPI",241000,2.13,5100000],
-  ["두산로보틱스","454910","로봇/자동화","KOSDAQ",48200,5.27,4700000],
-  ["레인보우로보틱스","277810","로봇/자동화","KOSDAQ",62400,8.12,2100000],
-  ["솔브레인","357780","반도체소재","KOSPI",318500,1.27,4200000],
-  ["하나머티리얼즈","166090","반도체소재","KOSPI",76800,-4.00,1600000],
-  ["동진쎄미켐","005290","반도체소재","KOSPI",62300,-5.61,3400000],
-  ["원익IPS","240810","반도체장비","KOSDAQ",35400,2.33,2700000],
-  ["피에스케이홀딩스","319660","반도체장비","KOSDAQ",131900,-3.80,1800000],
-  ["HPSP","403870","반도체장비","KOSDAQ",60100,9.90,2800000],
-  ["이오테크닉스","039030","반도체장비","KOSDAQ",152000,1.54,1200000],
-  ["테크윙","089030","테스트소켓","KOSDAQ",27800,3.72,800000],
-  ["리노공업","058470","테스트소켓","KOSDAQ",187000,-0.53,1300000],
-  ["SK텔레콤","017670","통신","KOSPI",52300,0.58,12700000],
-  ["KT","030200","통신","KOSPI",44800,0.45,11600000],
-  ["LG유플러스","032640","통신","KOSPI",11050,-0.45,4700000],
-  ["삼성물산","028260","지주사","KOSPI",161500,0.94,30100000],
-  ["LG","003550","지주사","KOSPI",88000,1.15,15400000],
-  ["SK","034730","지주사","KOSPI",153500,-0.65,11000000],
-  ["한국전력","015760","유틸리티","KOSPI",21250,0.24,13600000],
-  ["한국가스공사","036460","유틸리티","KOSPI",40600,0.99,3600000],
-  ["HMM","011200","해운","KOSPI",17850,3.18,14500000],
-  ["팬오션","028670","해운","KOSPI",4345,1.52,2100000],
-  ["삼성중공업","010140","조선","KOSPI",14300,2.51,7400000],
-  ["한국조선해양","009540","조선","KOSPI",173000,1.76,13500000],
-  ["HD현대중공업","329180","조선","KOSPI",268500,2.30,9600000],
-  ["대한항공","003490","항공","KOSPI",24150,-0.62,4300000],
-  ["아시아나항공","020560","항공","KOSPI",8540,-1.27,1200000],
-  ["NAVER","035420","인터넷/플랫폼","KOSPI",182500,0.83,29800000],
-  ["카카오","035720","인터넷/플랫폼","KOSPI",35500,-1.39,15200000],
-  ["크래프톤","259960","게임","KOSPI",295000,-0.34,12700000],
-  ["엔씨소프트","036570","게임","KOSPI",163500,-3.11,3600000],
-  ["넷마블","251270","게임","KOSPI",52900,-0.56,2900000],
-  ["HYBE","352820","엔터/미디어","KOSPI",147000,-2.32,5900000],
-  ["SM엔터","041510","엔터/미디어","KOSDAQ",78600,-1.27,1700000],
-  ["아모레퍼시픽","090430","화장품","KOSPI",78400,-1.89,4500000],
-  ["LG생활건강","051900","화장품","KOSPI",278000,-0.71,4300000],
-  ["셀트리온","068270","바이오신약","KOSPI",148000,1.37,18600000],
-  ["삼성바이오에피스","207940","바이오신약","KOSDAQ",89200,0.22,800000],
-  ["한미약품","128940","제약","KOSPI",298000,0.34,3500000],
-  ["종근당","185750","제약","KOSPI",95700,-0.52,1200000],
-  ["유한양행","000100","제약","KOSPI",88200,0.23,3200000],
-  ["미래에셋증권","006800","증권","KOSPI",8620,1.41,4100000],
-  ["삼성증권","016360","증권","KOSPI",46300,0.87,3400000],
-  ["키움증권","039490","증권","KOSDAQ",104500,2.43,2400000],
-  ["삼성화재","000810","보험","KOSPI",338000,0.60,9700000],
-  ["현대해상","001450","보험","KOSPI",35850,0.42,2300000],
-  ["이마트","139480","유통","KOSPI",47200,-0.42,1900000],
-  ["롯데쇼핑","023530","유통","KOSPI",55800,-0.54,2300000],
-  ["신세계","004170","유통","KOSPI",123500,-1.20,2600000],
-  ["오리온","271560","음식료","KOSPI",87100,-0.57,2400000],
-  ["농심","004370","음식료","KOSPI",364000,0.55,1300000],
-  ["하이트진로","000080","음식료","KOSPI",19000,-0.52,1000000],
-  ["DB하이텍","000990","비메모리","KOSDAQ",220500,21.80,5200000],
-  ["LX세미콘","108320","비메모리","KOSDAQ",67100,1.82,1200000],
-  ["동진쎄미켐","005290","반도체소재","KOSPI",62300,-5.61,3400000],
-  ["SK스퀘어","402340","지주사","KOSPI",65400,0.46,9200000],
-  ["포스코DX","022100","SW/AI","KOSDAQ",14550,2.68,2100000],
-  ["카카오뱅크","323410","은행","KOSPI",20800,-0.95,9900000],
-  ["케이뱅크","279570","은행","KOSPI",8270,-0.60,4500000],
-  ["코스모신소재","005070","배터리소재","KOSDAQ",42750,-2.85,400000],
-  ["에코프로","086520","배터리소재","KOSDAQ",74900,-3.75,5300000],
-  ["에코프로비엠","247540","배터리소재","KOSDAQ",142000,-2.74,8600000],
-  ["포스코퓨처엠","003670","배터리소재","KOSPI",142000,-2.33,8200000],
-  ["엘앤에프","066970","배터리소재","KOSDAQ",68400,-3.51,2300000],
-  ["HD현대","267250","지주사","KOSPI",76200,0.66,4600000],
-  ["한화에어로스페이스","012450","방위산업","KOSPI",682000,4.27,18400000],
-  ["LIG넥스원","079550","방위산업","KOSPI",237500,2.16,4800000],
-  ["한국항공우주","047810","방위산업","KOSPI",72900,1.11,3600000],
-  ["현대두산인프라코어","042670","로봇/자동화","KOSPI",14350,1.41,3700000],
-  ["삼성SDS","018260","SW/AI","KOSPI",152500,0.33,11600000],
-  ["삼성전기","009150","반도체소재","KOSPI",157200,17.30,11800000],
-  ["삼화콘덴서","001820","반도체소재","KOSPI",132600,30.00,800000],
-  ["OCI홀딩스","010060","화학","KOSPI",360000,14.50,4200000],
-  ["제주반도체","080220","비메모리","KOSDAQ",118900,0.20,400000],
-  ["파두","440590","반도체장비","KOSDAQ",116800,-9.00,300000],
-  ["SK네트웍스","001740","유통","KOSPI",10920,30.00,1800000],
-  ["SFA반도체","036540","비메모리","KOSDAQ",11010,7.40,200000],
-  ["현대글로비스","086280","자동차부품","KOSPI",158000,0.32,6400000],
-  ["LS","006260","지주사","KOSPI",123500,1.23,4900000],
-  ["GS건설","006360","건설","KOSPI",15850,-0.31,1000000],
-  ["대우건설","047040","건설","KOSPI",4860,0.83,1000000],
-  ["HDC현대산업개발","294870","건설","KOSPI",17400,1.40,800000],
-];
+/* ════════════════════════════════════════
+   STATE
+════════════════════════════════════════ */
+let ALL_STOCKS = [];
+let SECTOR_RS  = [];
+let activeSectors = new Set();
+let filters = { period:"12m", rsrange:"all", cap:"all", mkt:"all", mmt:false, starred:false, rising:false };
+let searchQ = "";
+let sortKey = "rs", sortDir = -1;
+let page = 1, pageSize = 50;
+const starred = new Set();
 
-/* ── RS 점수 생성 유틸 ── */
-function seedRnd(seed) {
-  let s = seed;
-  return () => { s = (s*9301+49297)%233280; return s/233280; };
-}
+/* ════════════════════════════════════════
+   2. 데이터 페칭 및 RS 계산 로직
+════════════════════════════════════════ */
+async function fetchAndProcessData() {
+  try {
+    const res = await fetch(WORKER_API_URL);
+    if (!res.ok) throw new Error("API 연동 실패");
+    const data = await res.json();
+    const rawStocks = data.stocks || [];
 
-function generateStocks() {
-  const stocks = [];
-  STOCK_NAMES.forEach((row, idx) => {
-    const [name, code, sector, mkt, price, chg, capB] = row;
-    const rnd = seedRnd(idx * 137 + code.charCodeAt(0) * 31);
+    // 1단계: 각 종목의 과거 수익률 계산
+    const processed = rawStocks.map(s => {
+      const hist = s.history || [];
+      const current = s.quote?.price || 0;
+      const chg = (s.quote?.changePercent || 0) * 100;
+      const cap = s.quote?.marketCap || 0;
+      const vol = s.quote?.volume || 0;
 
-    // 섹터별 RS 기준값 세팅
-    const sectorBonus = {
-      "반도체소재":88,"반도체장비":85,"메모리":82,"비메모리":84,
-      "전력기기":87,"로봇/자동화":86,"원자력":84,"방위산업":85,
-      "테스트소켓":88,"지주사":80,"통신":76,"건설":72,
-      "증권":75,"SW/AI":79,"배터리셀":62,"배터리소재":58,
-      "바이오신약":72,"의료기기":68,"철강/비철":70,"화학":52,
-      "은행":66,"보험":65,"해운":62,"자동차":60,
-      "자동차부품":58,"조선":76,"항공":55,"유통":48,
-      "음식료":52,"제약":60,"인터넷/플랫폼":56,"게임":42,
-      "엔터/미디어":38,"화장품":40,"리츠":44,"유틸리티":58,
-    };
-    const base = sectorBonus[sector] || 60;
-    const noise = (rnd() - 0.5) * 24;
-    const rs12m = Math.max(1, Math.min(99, Math.round(base + noise)));
-    const rs6m  = Math.max(1, Math.min(99, Math.round(rs12m + (rnd()-0.5)*12)));
-    const rs3m  = Math.max(1, Math.min(99, Math.round(rs6m + (rnd()-0.5)*12)));
-    const rs1m  = Math.max(1, Math.min(99, Math.round(rs3m + (rnd()-0.5)*12)));
-    const rising = rs3m > rs6m && rs6m > rs12m * 0.95;
-    const mmt = rs12m >= 70 && chg >= -3 && rising;
+      // 과거 가격 구하기 (주말 제외 대략적인 거래일 기준: 1달=21일, 3달=63일, 6달=126일, 1년=252일)
+      const getPastPrice = (days) => {
+        if (!hist.length) return current;
+        const targetIdx = Math.max(0, hist.length - 1 - days);
+        return hist[targetIdx]?.close || current;
+      };
 
-    stocks.push({
-      name, code, sector, mkt, price, chg,
-      cap: capB,
-      rs12m, rs6m, rs3m, rs1m,
-      rising, mmt,
-      starred: false,
-      vol: Math.round(capB * (0.003 + rnd()*0.02) / price),
+      const p1m = getPastPrice(21);
+      const p3m = getPastPrice(63);
+      const p6m = getPastPrice(126);
+      const p12m = getPastPrice(252);
+
+      return {
+        name: s.name, code: s.code, sector: s.sector, mkt: s.market,
+        price: current, chg: chg, cap: cap, vol: vol,
+        ret1m: p1m ? (current / p1m) - 1 : 0,
+        ret3m: p3m ? (current / p3m) - 1 : 0,
+        ret6m: p6m ? (current / p6m) - 1 : 0,
+        ret12m: p12m ? (current / p12m) - 1 : 0,
+      };
     });
-  });
-  // 섹터 평균 RS 계산
-  return stocks;
+
+    // 2단계: 수익률 기준 상대강도(Percentile) 점수 계산 헬퍼
+    const calculatePercentile = (arr, retKey, rsKey) => {
+      // 수익률 오름차순 정렬 (수익률이 가장 낮으면 1점, 높으면 99점)
+      const sorted = [...arr].sort((a, b) => a[retKey] - b[retKey]);
+      sorted.forEach((item, idx) => {
+        // 1~99 사이의 상대 점수 부여
+        const score = Math.round((idx / Math.max(1, arr.length - 1)) * 98) + 1;
+        item[rsKey] = score;
+      });
+    };
+
+    calculatePercentile(processed, 'ret1m', 'rs1m');
+    calculatePercentile(processed, 'ret3m', 'rs3m');
+    calculatePercentile(processed, 'ret6m', 'rs6m');
+    calculatePercentile(processed, 'ret12m', 'rs12m');
+
+    // 3단계: 최종 MMT 및 모멘텀 플래그 생성
+    processed.forEach(s => {
+      s.rising = s.rs3m > s.rs6m && s.rs6m > s.rs12m * 0.95;
+      s.mmt = s.rs12m >= 70 && s.chg >= -3 && s.rising;
+      s.starred = starred.has(s.code);
+    });
+
+    ALL_STOCKS = processed;
+    SECTOR_RS = getSectorRS(ALL_STOCKS);
+    return true;
+  } catch (error) {
+    console.error("데이터 로드 에러:", error);
+    return false;
+  }
 }
 
 /* ── 섹터 평균 RS ── */
@@ -516,7 +107,7 @@ function getSectorRS(stocks) {
   const map = {};
   stocks.forEach(s => {
     if (!map[s.sector]) map[s.sector] = [];
-    map[s.sector].push(s.rs12m);
+    map[s.sector].push(getRS(s));
   });
   return Object.entries(map).map(([n, arr]) => {
     const avg = Math.round(arr.reduce((a,b)=>a+b,0)/arr.length);
@@ -551,18 +142,6 @@ function fmtVol(v) {
   return v.toLocaleString();
 }
 
-/* ════════════════════════════════════════
-   STATE
-════════════════════════════════════════ */
-let ALL_STOCKS = generateStocks();
-let SECTOR_RS  = getSectorRS(ALL_STOCKS);
-let activeSectors = new Set();
-let filters = { period:"12m", rsrange:"all", cap:"all", mkt:"all", mmt:false, starred:false, rising:false };
-let searchQ = "";
-let sortKey = "rs", sortDir = -1;
-let page = 1, pageSize = 50;
-const starred = new Set();
-
 /* ── RS 점수 반환 (기간 선택 반영) ── */
 function getRS(s) {
   if (filters.period === "6m") return s.rs6m;
@@ -575,27 +154,21 @@ function getRS(s) {
 function applyFilters(stocks) {
   return stocks.filter(s => {
     const rs = getRS(s);
-    // 섹터 필터
     if (activeSectors.size > 0 && !activeSectors.has(s.sector)) return false;
-    // RS 범위
     if (filters.rsrange === "90" && rs < 90) return false;
     if (filters.rsrange === "80" && rs < 80) return false;
     if (filters.rsrange === "70" && rs < 70) return false;
     if (filters.rsrange === "50" && rs < 50) return false;
     if (filters.rsrange === "u50" && rs >= 50) return false;
-    // 시총
     const cap = s.cap;
     if (filters.cap === "10t" && cap < 10e12) return false;
     if (filters.cap === "1t"  && cap < 1e12)  return false;
     if (filters.cap === "3k"  && cap < 3e10)  return false;
     if (filters.cap === "1k"  && cap < 1e10)  return false;
-    // 거래소
     if (filters.mkt !== "all" && s.mkt !== filters.mkt) return false;
-    // 특수 조건
     if (filters.mmt && !s.mmt) return false;
     if (filters.starred && !starred.has(s.code)) return false;
     if (filters.rising && !s.rising) return false;
-    // 검색
     if (searchQ && !s.name.includes(searchQ) && !s.code.includes(searchQ)) return false;
     return true;
   });
@@ -694,7 +267,6 @@ function renderTable() {
     tr.innerHTML = `<td colspan="12" style="text-align:center;padding:48px;color:var(--t3)">
       <div style="font-size:28px;margin-bottom:8px;opacity:.3">🔍</div>
       <div style="font-weight:600;color:var(--t2);margin-bottom:4px">조건에 맞는 종목이 없습니다</div>
-      <div style="font-size:11px">필터를 조정해보세요</div>
     </td>`;
     tbody.appendChild(tr);
   } else {
@@ -706,7 +278,6 @@ function renderTable() {
       const secDef = SECTORS_DEF.find(d=>d.n===s.sector);
       const secColor = secDef?.c || "#94a3b8";
 
-      // RS 변화 방향
       const rsChg = s.rs1m - s.rs3m;
       const rsArrow = rsChg > 3 ? '<span style="color:#22c55e;font-size:10px">▲</span>' :
                       rsChg < -3 ? '<span style="color:#ef4444;font-size:10px">▼</span>' : '';
@@ -799,13 +370,11 @@ document.addEventListener("click", e => {
   const g = btn.dataset.g, val = btn.dataset.val;
 
   if (g === "special") {
-    // toggle
     btn.classList.toggle("on");
     if (val === "mmt")     filters.mmt     = btn.classList.contains("on");
     if (val === "starred") filters.starred = btn.classList.contains("on");
     if (val === "rising")  filters.rising  = btn.classList.contains("on");
   } else {
-    // single-select
     btn.closest(".fg").querySelectorAll(".fb").forEach(b => b.classList.remove("on"));
     btn.classList.add("on");
     if (g === "period")  filters.period  = val;
@@ -814,7 +383,6 @@ document.addEventListener("click", e => {
     if (g === "mkt")     filters.mkt     = val;
   }
   page = 1;
-  // RS 기간 변경 시 섹터 RS 재계산
   if (g === "period") {
     SECTOR_RS = getSectorRS(ALL_STOCKS);
     renderSpectrum();
@@ -854,7 +422,6 @@ window.toggleStar = function(btn, code) {
   if (starred.has(code)) starred.delete(code);
   else starred.add(code);
   btn.classList.toggle("on", starred.has(code));
-  // starred 필터 켜져있으면 재렌더
   if (filters.starred) renderTable();
 };
 
@@ -869,33 +436,51 @@ window.goPage = function(p) {
 };
 
 /* 갱신 버튼 */
-document.getElementById("refreshBtn").addEventListener("click", function() {
+document.getElementById("refreshBtn").addEventListener("click", async function() {
   this.textContent = "⟳ 갱신 중...";
   this.disabled = true;
-  setTimeout(() => {
-    ALL_STOCKS = generateStocks();
-    SECTOR_RS  = getSectorRS(ALL_STOCKS);
-    renderSpectrum();
-    renderSectorTags();
-    renderTable();
-    this.textContent = "⟳ 갱신";
-    this.disabled = false;
-    document.getElementById("updateTime").textContent = new Date().toLocaleTimeString("ko-KR", {hour:"2-digit",minute:"2-digit"});
-  }, 900);
+  
+  // 로딩 UI 표시용 스켈레톤
+  const tbody = document.getElementById("tableBody");
+  tbody.innerHTML = `<tr class="skel-row"><td colspan="12"><div class="skel"></div></td></tr>`;
+
+  await fetchAndProcessData();
+  
+  renderSpectrum();
+  renderSectorTags();
+  renderTable();
+  
+  this.textContent = "⟳ 갱신";
+  this.disabled = false;
+  document.getElementById("updateTime").textContent = new Date().toLocaleTimeString("ko-KR", {hour:"2-digit",minute:"2-digit"});
 });
 
 /* ════════════════════════════════════════
    INIT
 ════════════════════════════════════════ */
-(function init() {
+(async function init() {
   const now = new Date();
-  document.getElementById("updateTime").textContent = now.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"});
-  document.getElementById("lastUpdate").textContent = `${now.toLocaleDateString("ko-KR")} 기준 전일 종가`;
-  renderSpectrum();
-  renderSectorTags();
-  updateSortHeaders();
-  renderTable();
+  document.getElementById("updateTime").textContent = "데이터 로딩 중...";
+  
+  // 로딩 스켈레톤
+  document.getElementById("tableBody").innerHTML = `
+    <tr class="skel-row"><td colspan="12"><div class="skel"></div></td></tr>
+    <tr class="skel-row"><td colspan="12"><div class="skel"></div></td></tr>
+    <tr class="skel-row"><td colspan="12"><div class="skel"></div></td></tr>
+  `;
+
+  // 데이터 받아오기
+  const success = await fetchAndProcessData();
+  
+  if(success) {
+    document.getElementById("updateTime").textContent = now.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"});
+    document.getElementById("lastUpdate").textContent = `${now.toLocaleDateString("ko-KR")} 기준 전일 종가`;
+    
+    renderSpectrum();
+    renderSectorTags();
+    updateSortHeaders();
+    renderTable();
+  } else {
+    document.getElementById("tableBody").innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:red;">데이터를 불러오는데 실패했습니다. 워커 API 주소를 확인해주세요.</td></tr>`;
+  }
 })();
-</script>
-</body>
-</html>
