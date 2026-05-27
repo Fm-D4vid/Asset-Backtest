@@ -649,6 +649,7 @@ function TrendFollowing({trendState,setTrendState}){
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <span style={{fontSize:11,color:"#636E7B"}}>수수료%</span>
             <input type="number" value={st.feePercent} onChange={e=>set("feePercent",+e.target.value)} step={0.05} min={0} max={5} style={{width:60,padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}/>
+          </div>   
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <span style={{fontSize:11,color:"#636E7B"}}>초기자금</span>
             <input type="number" value={st.initAmt} onChange={e=>set("initAmt",+e.target.value)} style={{width:100,padding:"5px 8px",border:"1px solid #D6CEC4",borderRadius:4,fontSize:11,fontFamily:"'DM Mono'"}}/>
